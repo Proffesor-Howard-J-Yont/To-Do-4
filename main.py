@@ -22,7 +22,6 @@ global return2_
 return2_ = 'False'
 
 undone_tasks = 0
-
 root = Window(themename='darkly')
 # vapor, cyborg, minty, lumen, darkly, superhero
 root.title("To-Do 4.2 - A new and innovative tasks organizer.")
@@ -1479,7 +1478,7 @@ class display_task:
                 self.sep3L.config(bootstyle='info')
                 self.mylistL.config(bootstyle='info')
         elif self.star == 'y' and self.status == 'checked':
-            self.taskT.config(bootstyle='warning', foreground='#f39c12')
+            self.taskT.config(font=('Calibri', 30, 'overstrike'), bootstyle='warning', foreground='#f39c12')
             self.startaskB.config(image=starredimg, bootstyle='warning outline')
             self.checktaskB.config(image=checkedtask, bootstyle='warning outline')
             self.tsdL.config(bootstyle='warning')
