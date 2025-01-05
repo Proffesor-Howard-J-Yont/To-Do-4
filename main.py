@@ -25,7 +25,7 @@ undone_tasks = 0
 root = Window(themename='darkly')
 # vapor, cyborg, minty, lumen, darkly, superhero
 root.title("To-Do 4.2 - A new and innovative tasks organizer.")
-root.geometry('1200x850+300+100')
+root.geometry('1000x700+300+100')
 root.iconbitmap('icon.ico')
 
 jut_img          = PhotoImage(file='check_circle.png')
@@ -109,11 +109,11 @@ smart_on = 'off'
 current_design = 'home'
 
 width = root.winfo_width()
-if width > 1701: homewidgetsize=5
-elif width > 1401 and width < 1700: homewidgetsize=4
-elif width > 1001 and width < 1400: homewidgetsize=3
-elif width < 1000 and width > 700: homewidgetsize=2
-elif width < 700: homewidgetsize=1
+if width >= 1700: homewidgetsize=5
+elif width >= 1400 and width <= 1700: homewidgetsize=4
+elif width >= 1000 and width <= 1400: homewidgetsize=3
+elif width <= 1000 and width >= 700: homewidgetsize=2
+elif width <= 700: homewidgetsize=1
 
 delzoneVar_lists = IntVar()
 delzoneVar_corkboard = IntVar()
@@ -601,6 +601,7 @@ def home_design(e=None):
     # -- END OF WIDGETS --
 
     # -------- Sizings ----------
+    global homewidgetsize
     width = root.winfo_width()
     if width > 1701: homewidgetsize=5
     elif width > 1401 and width < 1700: homewidgetsize=4
@@ -1252,6 +1253,7 @@ def open_more_tasksmenu():
     posy = backFrame.winfo_pointery() - backFrame.winfo_rooty()
     listmenuF = Frame(backFrame, bootstyle='dark')
     listmenuF.place(x=posx, y=posy)
+    listmenuF.after(5000, gonewithlistmenuF)
 
     deletelistB = Button(listmenuF, text='🗑 Delete List                      ', command=lambda: droplist(), bootstyle='info outline')
     deletelistB.pack(fill=X, pady=4, padx=6)
@@ -1266,7 +1268,6 @@ def open_more_tasksmenu():
         deletelistB.config(state='disabled')
         renamelistB.config(state='disabled')
 
-    listmenuF.bind('<Leave>', gonewithlistmenuF)
 
 
 def announcer_more(header, subheader, tellmemoreheader, tellmemorewords):
@@ -1736,7 +1737,7 @@ class display_task:
         self.mifmoreB = Button(self.miF, text='💬 Open Large View  ', command=lambda: self.allfunctions(), bootstyle='info outline')
         self.mifmoreB.pack(fill=X, pady=4, padx=2)
 
-        self.miF.bind('<Leave>', gonewithmif)
+        self.miF.after(5000, gonewithmif)
     def allfunctions(self, e=None):
         global allfnctns_notes_entry, allfnctns_ministepsF, ms_count, allfncts_ministeps_add_msE, currentlistname, backFrame, tasks_frame, comingfrom, TDB_F, TDBnoshow, allfnctnsSEP, allfnctnsF_status_specialty, allfnctns_labelname, allfnctns_listname, allfnctnsF_status, allfnctns_status_button, allfnctns_difficulty_combobox, allfnctns_status_label, allfnctns_starred_button, allfnctns_starred_label, allfnctns_rename_button, allfnctns_rename_label, allfnctns_moveto_button, allfnctns_moveto_label, allfnctns_copyto_button, allfnctns_copyto_label, allfnctns_deltask_button, allfnctns_deltask_label, allfnctns_closeoverviewB
         try:
