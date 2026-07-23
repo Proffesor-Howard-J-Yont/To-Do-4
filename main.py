@@ -9,8 +9,13 @@ import sqlite3
 from tkinter import filedialog
 import time
 import td4_sqlite_processes as sql_process
-from win10toast import ToastNotifier
+sql_process.migrate_corkboard_positions()
+#from win10toast import ToastNotifier
 import random as rd
+from corkboard_freeform import FreeformCorkboard, PIN_WIDTH, PIN_HEIGHT
+import json
+from corkboard_rich_text import build_pin_preview, open_pin_editor
+sql_process.migrate_corkboard_content()
 
 #  COLORS
 # Default, primary, success, info, warning, danger, light, dark
@@ -24,8 +29,8 @@ return2_ = 'False'
 undone_tasks = 0
 root = Window(themename='darkly')
 # vapor, cyborg, minty, lumen, darkly, superhero
-root.title("To-Do 4.2 - A new and innovative tasks organizer.")
-root.geometry('1000x700+300+100')
+root.title("To-Do 4.3 Beta - A new and innovative tasks organizer. - Corkboard Update 2.1.0")
+root.geometry('1200x800+300+100')
 root.iconbitmap('icon.ico')
 
 jut_img          = PhotoImage(file='check_circle.png')
@@ -411,11 +416,137 @@ def tasks_design():
     taskE.bind('<FocusIn>', taskefocusin)
     taskE.bind('<FocusOut>', taskefocusout)
     taskE.insert(0, '+ Add Task')
+
+# ---------- Home screen layout: fluid resize with column snapping ----------
+
+HOME_WIDGETS_ORDER = ['meter', 'clock', 'alltasks', 'displist', 'quicksett']
+
+def get_home_col_count(width, current_cols):
+    """Decide how many columns the home grid should use.
+    Uses different thresholds going up vs down (hysteresis) so it
+    doesn't flicker back and forth right at the edge."""
+    if current_cols is None:
+        return 3 if width > 1150 else 2
+
+    if current_cols == 2 and width > 1150:
+        return 3
+    if current_cols == 3 and width < 1000:
+        return 2
+    return current_cols
+
+
+def apply_home_layout(cols):
+    global meterwidgetF, clockwidgetF, alltaskseqlF, displistF, quicksettF, home_middleF
+
+    widget_map = {
+        'meter': meterwidgetF,
+        'clock': clockwidgetF,
+        'alltasks': alltaskseqlF,
+        'displist': displistF,
+        'quicksett': quicksettF,
+    }
+
+    target = home_middleF.inner
+
+    for i in range(5):
+        target.grid_columnconfigure(i, weight=0, uniform='')
+
+    for i in range(cols):
+        target.grid_columnconfigure(i, weight=1, uniform='homecol')
+
+    for i, key in enumerate(HOME_WIDGETS_ORDER):
+        w = widget_map[key]
+        w.grid(row=i // cols, column=i % cols, padx=15, pady=15, sticky='nsew')
+
+
+_home_resize_job = None
+
+def on_home_resize(e=None):
+    """Debounced resize handler — waits for resizing to settle before
+    recalculating, so dragging the window doesn't stutter."""
+    global _home_resize_job
+    if current_design != 'home':
+        return
+    if _home_resize_job:
+        root.after_cancel(_home_resize_job)
+    _home_resize_job = root.after(120, do_home_relayout)
+
+
+def do_home_relayout():
+    global homewidgetsize
+    width = root.winfo_width()
+    new_cols = get_home_col_count(width, homewidgetsize)
+    if new_cols != homewidgetsize:
+        homewidgetsize = new_cols
+        apply_home_layout(new_cols)
+
+def quick_toggle(rowid, listname):
+    conn = sqlite3.connect('info.db')
+    c = conn.cursor()
+    c.execute("SELECT checked FROM '{}' WHERE rowid=?".format(listname), (rowid,))
+    status = c.fetchone()[0]
+    new_status = 'checked' if status == 'unchecked' else 'unchecked'
+    c.execute("UPDATE '{}' SET checked=? WHERE rowid=?".format(listname), (new_status, rowid))
+    conn.commit()
+    conn.close()
+    home_design()
+
+class VStretchScrollFrame(Frame):
+    """Scrolls vertically only when content overflows; content stretches
+    to fill the available width but keeps its natural height."""
+    def __init__(self, parent, **kwargs):
+        super().__init__(parent, **kwargs)
+        self.canvas = tk.Canvas(self, highlightthickness=0)
+        self.vscroll = Scrollbar(self, orient='vertical', command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self.vscroll.set)
+        self.canvas.pack(side='left', fill='both', expand=True)
+
+        self.inner = Frame(self.canvas, bootstyle='dark')
+        self.inner_id = self.canvas.create_window((0, 0), window=self.inner, anchor='nw')
+
+        self.inner.bind('<Configure>', self._on_inner_configure)
+        self.canvas.bind('<Configure>', self._on_canvas_configure)
+
+    def _on_inner_configure(self, event):
+        self.canvas.configure(scrollregion=self.canvas.bbox('all'))
+        self._update_scrollbar()
+
+    def _on_canvas_configure(self, event):
+        # stretch inner frame to match canvas width -> horizontal fill
+        self.canvas.itemconfig(self.inner_id, width=event.width)
+        self._update_scrollbar()
+
+    def _update_scrollbar(self):
+        self.canvas.update_idletasks()
+        bbox = self.canvas.bbox('all')
+        if not bbox:
+            return
+        content_height = bbox[3] - bbox[1]
+        visible_height = self.canvas.winfo_height()
+        if content_height > visible_height:
+            self.vscroll.pack(side='right', fill='y')
+        else:
+            self.vscroll.pack_forget()
+
+def quick_add_task(text, listname):
+    text = text.strip()
+    if not text:
+        return
+    conn = sqlite3.connect('info.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO '{}' VALUES (:words, :checked, :starred, :difficulty, :duedateday, :duedatetime, :duedateonoff, :amiaministep, :whichminiami, :importance, :notes)".format(listname),
+              {'words': text, 'checked': 'unchecked', 'starred': 'n', 'difficulty': sql_process.check_setting('def_difficulty'),
+               'duedateday': time.strftime("%x"), 'duedatetime': '1200', 'duedateonoff': sql_process.check_setting('def_duedateonoff'),
+               'amiaministep': 'no', 'whichminiami': 'notamini', 'importance': '1', 'notes': sql_process.check_setting('def_note')})
+    conn.commit()
+    conn.close()
+    home_design()
+
 def home_design(e=None):
     clear_board()
     global current_design
     current_design = 'home'
-    global song_detailsL, song_box, playB, song_timeL, currentlistname, meterwidgetF, song_nameL, tasksleftL
+    global song_detailsL, song_box, playB, song_timeL, currentlistname, meterwidgetF, song_nameL, tasksleftL, home_middleF
     tasksleftL.configure(text='             Home')
 
     if currentlistname == 'a':
@@ -424,11 +555,11 @@ def home_design(e=None):
     if sql_process.check_setting('hhto') == 'y':
         home_header.pack()
 
-    home_middleF = ScrolledFrame(backFrame, bootstyle='dark round')
+    home_middleF = VStretchScrollFrame(backFrame, bootstyle='dark')
     home_middleF.pack(fill=BOTH, expand=True)
 
     # -------- Widget #1: Meter Widget -------
-    meterwidgetF = Frame(home_middleF, bootstyle='default')
+    meterwidgetF = Frame(home_middleF.inner, bootstyle='default')
     meterwidgetF.grid(row=0, column=0, pady=30, padx=30, sticky='nsew')
 
     conn = sqlite3.connect('info.db')
@@ -460,9 +591,17 @@ def home_design(e=None):
     mw_change_list_displaying = Button(toolbar_meterF, text='Change...', bootstyle='info outline', command=lambda: meter_switch_to())
     mw_change_list_displaying.grid(row=0, column=1, pady=15, padx=30)
 
+    if meter_undonetasks > 0:
+        conn = sqlite3.connect('info.db')
+        c = conn.cursor()
+        c.execute("SELECT task FROM '{}' WHERE checked='unchecked' AND amiaministep='no' ORDER BY starred DESC LIMIT 1".format(currentlistname))
+        next_task = c.fetchone()
+        if next_task:
+            Label(meterwidgetF, text=f"Next task: {next_task[0]}", bootstyle='light', font=('Calibri', 12)).pack(pady=(0,10))
+
     # ----------- Widget #2: Clock Widget --------------
     global clockwidgetF, clock_hourL, clock_minuteL, clock_secondL, clock_dateL, clock_dayL
-    clockwidgetF = Frame(home_middleF, bootstyle='default')
+    clockwidgetF = Frame(home_middleF.inner, bootstyle='default')
     clockwidgetF.grid(row=0, column=1, pady=30, padx=0, sticky='nsew')
 
     clock_mainF = Frame(clockwidgetF, bootstyle='default')
@@ -480,7 +619,7 @@ def home_design(e=None):
 
     #---------- Widget #3: All tasks equal... -------------
     global alltaskseqlF
-    alltaskseqlF = Frame(home_middleF, bootstyle='default')
+    alltaskseqlF = Frame(home_middleF.inner, bootstyle='default')
     alltaskseqlF.grid(row=0, column=2, pady=30, padx=30, sticky='nsew')
 
     alltaskseqlheaderL = Label(alltaskseqlF, text='Altogether', font=('Calibri', 30))
@@ -500,15 +639,21 @@ def home_design(e=None):
         for individ_task in alltaskseql_tasksgrabber:
             taskinlist+=1
             tasksinlists+=1
-        Label(alltaskseql_listsF, text=f'{sql_process.get_current_list_display(individ_list[1])[0]} - {taskinlist}', font=('Calibri', 15)).pack(padx=2, pady=2)
+        #Label(alltaskseql_listsF, text=f'{sql_process.get_current_list_display(individ_list[1])[0]} - {taskinlist}', font=('Calibri', 15)).pack(padx=2, pady=2)
+        listbtn = Button(alltaskseql_listsF, text=f'{sql_process.get_current_list_display(individ_list[1])[0]} - {taskinlist}',
+                  bootstyle='link',
+                  command=lambda ln=individ_list[1]: (globals().__setitem__('currentlistname', ln), home_design()))
+        listbtn.pack(padx=2, pady=2, fill=X)
 
     Separator(alltaskseqlF, bootstyle='secondary').pack(fill=X, padx=10, pady=0)
 
     alltaskseqltotalL = Label(alltaskseqlF, text=f'Total: {tasksinlists} tasks to go!', font=('Calibri', 15))
     alltaskseqltotalL.pack(pady=10, padx=20)
+
+
     # --------- Widget #4: Display the list of your choice ---------
     global displistF
-    displistF = Frame(home_middleF, bootstyle='default')
+    displistF = Frame(home_middleF.inner, bootstyle='default')
     displistF.grid(row=1, column=0, pady=0, padx=30, sticky='nsew')
 
     displist_headerF = Frame(displistF, bootstyle='default')
@@ -549,8 +694,9 @@ def home_design(e=None):
 
     homedisplistgridrow = 0
     for single_homeitem in homeitems:
-        home_listwidgetB = Button(displist_tasksF, image=uncheckedsmall, bootstyle='danger outline')
-        #home_listwidgetB.grid(row=homedisplistgridrow, column=0, padx=2, pady=5)
+        home_listwidgetB = Button(displist_tasksF, image=uncheckedsmall, bootstyle='danger outline',
+                           command=lambda rowid=single_homeitem[0]: quick_toggle(rowid, currentlistname))
+        home_listwidgetB.grid(row=homedisplistgridrow, column=0, padx=2, pady=5)
         home_listwidgetL = Label(displist_tasksF, text=single_homeitem[1], bootstyle='danger', font=('Calibri', 15))
         home_listwidgetL.grid(row=homedisplistgridrow, column=1, sticky='w', padx=2, pady=10)
 
@@ -568,78 +714,26 @@ def home_design(e=None):
 
     # --------- Widget #5: Quick Settings ---------
     global quicksettF
-    quicksettF = Frame(home_middleF, bootstyle='default')
+    quicksettF = Frame(home_middleF.inner, bootstyle='default')
     quicksettF.grid(row=1, column=1, pady=0, padx=0, sticky='nsew')
 
-    quicksett_header = Label(quicksettF, text='Quick Settings', font=('Calibri', 18, 'bold'))
-    quicksett_header.pack(padx=10, pady=10)
+    quickadd_L = Label(quicksettF, text='Quick Add', font=('Calibri', 20, 'bold'))
+    quickadd_L.pack(fill='y', pady=30, padx=20)
 
-    quicksett_settF = Frame(quicksettF)
-    quicksett_settF.pack(fill=BOTH, expand=True, padx=10, pady=10)
+    quickadd_E = Entry(quicksettF, font=('Calibri', 16), justify='center', bootstyle='light')
+    quickadd_E.pack(fill='both', padx=10, pady=0)
+    quickadd_E.bind('<Return>', lambda e: quick_add_task(quickadd_E.get(), currentlistname))
 
-    quicksett_abd_B = Button(quicksett_settF, image=toggle_offimg2, bootstyle='info link', command=lambda: (sql_process.setting_configure('abd', 'y'), home_design()))
-    quicksett_abd_B.grid(row=0, column=0)
-
-    if sql_process.check_setting('abd') == 'y':
-        quicksett_abd_B.config(image=toggle_onimg2, command=lambda: (sql_process.setting_configure('abd', 'n'), home_design()))
-
-    quicksett_abd_L = Label(quicksett_settF, text='Ask before delete', font=('Calibri', 15))
-    quicksett_abd_L.grid(row=0, column=1, sticky='nsew')
-
-    quicksett_cork_B = Button(quicksett_settF, image=toggle_offimg2, bootstyle='info link', command=lambda: (sql_process.setting_configure('crk', 'y'), home_design(), unlock_crk()))
-    quicksett_cork_B.grid(row=1, column=0)
-
-    if sql_process.check_setting('crk') == 'y':
-        quicksett_cork_B.config(image=toggle_onimg2, command=lambda: (sql_process.setting_configure('crk', 'n'), home_design(), lock_crk()))
-
-    quicksett_cork_L = Label(quicksett_settF, text='Corkboard', font=('Calibri', 15))
-    quicksett_cork_L.grid(row=1, column=1, sticky='nsew')
-
-    quicksett_opensetts_B = Button(quicksettF, text='Open Settings', bootstyle='info outline', command=lambda: settings())
-    quicksett_opensetts_B.pack(fill=BOTH, expand=True, padx=10, pady=10)
+    quickadd_adding_to_list_L = Label(quicksettF, text=f'Adding to list: {sql_process.get_current_list_display(currentlistname)[0]}', font=('Calibri', 12))
+    quickadd_adding_to_list_L.pack(fill='y', pady=30, padx=20)
 
     # -- END OF WIDGETS --
 
     # -------- Sizings ----------
     global homewidgetsize
     width = root.winfo_width()
-    if width > 1701: homewidgetsize=5
-    elif width > 1401 and width < 1700: homewidgetsize=4
-    elif width > 1001 and width < 1400: homewidgetsize=3
-    elif width < 1000 and width > 700: homewidgetsize=2
-    elif width < 700: homewidgetsize=1
-
-    if homewidgetsize == 5:
-        meterwidgetF.grid(row=0, column=0, pady=30, padx=30, sticky='nsew')
-        clockwidgetF.grid(row=0, column=1, pady=30, padx=0, sticky='nsew')
-        alltaskseqlF.grid(row=0, column=2, pady=30, padx=30, sticky='nsew')
-        displistF.grid(row=0, column=3, pady=30, padx=0, sticky='nsew')
-        quicksettF.grid(row=0, column=5, pady=30, padx=30, sticky='nsew')
-
-    elif homewidgetsize == 4:
-        meterwidgetF.grid(row=0, column=0, pady=30, padx=30, sticky='nsew')
-        clockwidgetF.grid(row=0, column=1, pady=30, padx=0, sticky='nsew')
-        alltaskseqlF.grid(row=0, column=2, pady=30, padx=30, sticky='nsew')
-        displistF.grid(row=0, column=3, pady=30, padx=0, sticky='nsew')
-        quicksettF.grid(row=1, column=0, pady=0, padx=30, sticky='nsew')
-    elif homewidgetsize == 3:
-        meterwidgetF.grid(row=0, column=0, pady=30, padx=30, sticky='nsew')
-        clockwidgetF.grid(row=0, column=1, pady=30, padx=0, sticky='nsew')
-        alltaskseqlF.grid(row=0, column=2, pady=30, padx=30, sticky='nsew')
-        displistF.grid(row=1, column=0, pady=0, padx=30, sticky='nsew')
-        quicksettF.grid(row=1, column=1, pady=0, padx=0, sticky='nsew')
-    elif homewidgetsize == 2:
-        meterwidgetF.grid(row=0, column=0, pady=30, padx=30, sticky='nsew')
-        clockwidgetF.grid(row=0, column=1, pady=30, padx=0, sticky='nsew')
-        alltaskseqlF.grid(row=1, column=0, pady=0, padx=30, sticky='nsew')
-        displistF.grid(row=1, column=1, pady=0, padx=0, sticky='nsew')
-        quicksettF.grid(row=2, column=0, pady=30, padx=30, sticky='nsew')
-    elif homewidgetsize == 1:
-        meterwidgetF.grid(row=0, column=0, pady=0, padx=30, sticky='nsew')
-        clockwidgetF.grid(row=1, column=0, pady=30, padx=30, sticky='nsew')
-        alltaskseqlF.grid(row=2, column=0, pady=0, padx=30, sticky='nsew')
-        displistF.grid(row=3, column=0, pady=30, padx=30, sticky='nsew')
-        quicksettF.grid(row=4, column=0, pady=0, padx=30, sticky='nsew')
+    homewidgetsize = get_home_col_count(width, None)
+    apply_home_layout(homewidgetsize)
 
     run_clock()
 
@@ -1025,140 +1119,152 @@ def settings():
     pswd2B = Button(psswrd_lblfrme, text='Save', bootstyle='info link', command=lambda: (sql_process.setting_configure('pino', pswdE.get()), settings()))
     pswd2B.grid(row=0, column=3)'''
 
+CARD_WIDTH = 240
+CARD_PADDING = 12
+
+CARD_MIN_WIDTH = 220
+CARD_PADDING = 12
+
+class CardsContainer(Frame):
+    def __init__(self, master):
+        super().__init__(master)
+        self.cards = []
+        self._cols_configured = 0
+        self.bind("<Configure>", self.on_resize)
+
+    def add_card(self, title, text, color='secondary'):
+        card = Frame(self, bootstyle=color, padding=10)
+        Label(card, text=title, bootstyle=f'{color} inverse', font=('Calibri', 16, 'bold'),
+              wraplength=CARD_MIN_WIDTH - 20).pack(anchor="w", fill=X)
+        Label(card, text=text, bootstyle=f'{color} inverse', font=('Calibri', 15),
+              wraplength=CARD_MIN_WIDTH - 20).pack(anchor="w", pady=(5, 0), fill=X)
+
+        self.cards.append(card)
+        self.relayout()
+
+    def on_resize(self, event):
+        self.relayout()
+
+    def relayout(self):
+        if not self.cards:
+            return
+
+        self.update_idletasks()
+        width = self.winfo_width()
+        if width < CARD_MIN_WIDTH:
+            return
+
+        cols = max(1, width // (CARD_MIN_WIDTH + CARD_PADDING))
+
+        # clear old column weights before applying new ones
+        for i in range(max(self._cols_configured, cols)):
+            self.grid_columnconfigure(i, weight=0, uniform='')
+        for i in range(cols):
+            self.grid_columnconfigure(i, weight=1, uniform='cardcol')
+        self._cols_configured = cols
+
+        for i, card in enumerate(self.cards):
+            card.grid(row=i // cols, column=i % cols, padx=CARD_PADDING // 2,
+                      pady=CARD_PADDING // 2, sticky='nsew')
 
 class display_pin:
     def __init__(self, pin):
-        global cork_pinsF
+        global cork_pinsF, root
         self.rowid = pin[0]
         self.title = pin[1]
-        self.actual = pin[2]
+        self.actual = pin[2]        # legacy plain-text column, used only for one-time backfill
         self.color = pin[3]
+        self.position_x = pin[4]
+        self.position_y = pin[5]
+        self.content_json = pin[6]
+        self.image_path = pin[7]
 
-        self.pin_frameF = Frame(cork_pinsF, bootstyle=self.color)
-        self.pin_frameF.pack(fill=X, padx=10, pady=10)
+        # one-time backfill: older pins have no content_json yet -- build a
+        # plain (unformatted) one from the legacy `actual` text column.
+        if not self.content_json:
+            backfilled = json.dumps({'text': self.actual or '', 'runs': []})
+            sql_process.update_pin_content(self.rowid, self.title, backfilled, self.image_path)
+            self.content_json = backfilled
 
-        self.pin_titleL = Label(self.pin_frameF, text=self.title, font=('Calibri', 18, 'bold'), bootstyle=f'{self.color} inverse')
-        self.pin_titleL.pack()
+        def build(parent):
+            return build_pin_preview(
+                parent, root, self.rowid, self.title, self.color,
+                self.content_json, self.image_path,
+                on_expand=self.expand, on_color=self.color_pin, on_delete=self.delete_pin,
+                pin_width=PIN_WIDTH, pin_height=PIN_HEIGHT
+            )
 
-        self.pin_actualL = Label(self.pin_frameF, text=self.actual, wraplength=1000, font=('Calibri', 15), bootstyle=f'{self.color} inverse')
-        self.pin_actualL.pack()
+        frame, placed_x, placed_y = cork_pinsF.add_pin(
+            self.rowid, build, x=self.position_x, y=self.position_y
+        )
+        if self.position_x is None or self.position_y is None:
+            sql_process.update_pin_position(self.rowid, placed_x, placed_y)
 
-        self.pin_toolbarF = Frame(self.pin_frameF, bootstyle=self.color)
-        self.pin_toolbarF.pack(fill=X)
+    def expand(self, rowid):
+        def save(rowid, new_title, new_content_json, new_image_path):
+            sql_process.update_pin_content(rowid, new_title, new_content_json, new_image_path)
+            corkboard_design()
+        open_pin_editor(root, self.rowid, self.title, self.content_json, self.image_path, save)
 
-        self.pin_colorB = Button(self.pin_toolbarF, image=paletteimg, bootstyle=self.color, command=lambda: self.color_pin())
-        self.pin_colorB.grid(row=0, column=0)
-
-        self.pin_editB = Button(self.pin_toolbarF, image=renametaskimg, bootstyle=self.color, command=lambda: self.edit_pin())
-        self.pin_editB.grid(row=0, column=1)
-
-        self.pin_deleteB = Button(self.pin_toolbarF, image=deletetask, bootstyle=self.color, command=lambda: self.delete_pin())
-        self.pin_deleteB.grid(row=0, column=2)
-
-    def delete_pin(self):
+    def delete_pin(self, rowid):
         conn_user000 = sqlite3.connect('user000.db')
         c_user000 = conn_user000.cursor()
-        c_user000.execute("""DELETE FROM corkboard WHERE rowid='{}' """.format(self.rowid))
+        c_user000.execute("DELETE FROM corkboard WHERE rowid=?", (self.rowid,))
         conn_user000.commit()
         corkboard_design()
 
-        #print(f'#: {self.rowid}\nTitle: {self.title}\nTitle: {self.title}\nActual: {self.actual}\nColor: {self.color}')
-    def edit_pin(self):
-        self.edit_pinF = Frame(root, bootstyle='default')
-        self.edit_pinF.place(in_=root, anchor='c', relx=.5, rely=.5)
-
-        self.edit_pin_titleF = LabelFrame(self.edit_pinF, text='Title', bootstyle='default')
-        self.edit_pin_titleF.pack(padx=10, pady=10, fill=X)
-        self.edit_pin_titleE = Entry(self.edit_pin_titleF, font=('Calibri', 15), width=30)
-        self.edit_pin_titleE.pack(padx=5, pady=15, fill=X)
-        self.edit_pin_titleE.insert(0, self.title)
-
-        self.edit_pin_actualF = LabelFrame(self.edit_pinF, text='Notes', bootstyle='default')
-        self.edit_pin_actualF.pack(padx=10, pady=10, fill=X)
-        self.edit_pin_actualE = Entry(self.edit_pin_actualF, font=('Calibri', 15), width=30)
-        self.edit_pin_actualE.pack(padx=5, pady=15, fill=X)
-        self.edit_pin_actualE.insert(0, self.actual)
-
-        self.edit_pin_goL = Button(self.edit_pinF, text='Go', bootstyle='primary', command=lambda: self.edit_pin_go())
-        self.edit_pin_goL.pack(padx=20, pady=5, fill=X)
-
-        self.edit_pin_closeL = Button(self.edit_pinF, text='X Close', bootstyle='primary outline', command=lambda: self.edit_pinF.destroy())
-        self.edit_pin_closeL.pack(padx=20, pady=5, fill=X)
-    def edit_pin_go(self):
-        conn_user000 = sqlite3.connect('user000.db')
-        c_user000 = conn_user000.cursor()
-        c_user000.execute("""UPDATE corkboard SET title='{}' WHERE rowid='{}' """.format(self.edit_pin_titleE.get(), self.rowid))
-        conn_user000.commit()
-        c_user000.execute("""UPDATE corkboard SET actual='{}' WHERE rowid='{}' """.format(self.edit_pin_actualE.get(), self.rowid))
-        conn_user000.commit()
-        self.edit_pinF.destroy()
-        corkboard_design()
-
-    def color_pin(self):
+    def color_pin(self, rowid):
         self.color_pinVAR = StringVar()
-        self.color_pinVAR.set('dark')
+        self.color_pinVAR.set(self.color)
 
         self.color_pinF = Frame(root, bootstyle='default')
         self.color_pinF.place(in_=root, anchor='c', relx=.5, rely=.5)
 
-        self.color_pin_darkB = Button(self.color_pinF, bootstyle='dark', text='     ', command=lambda: self.color_pinVAR.set('dark'))
-        self.color_pin_darkB.grid(row=0, column=0, padx=5, pady=10, sticky='nsew')
-        self.color_pin_secondaryB = Button(self.color_pinF, bootstyle='secondary', text='   ', command=lambda: self.color_pinVAR.set('secondary'))
-        self.color_pin_secondaryB.grid(row=0, column=1, padx=5, pady=10, sticky='nsew')
-        self.color_pin_lightB = Button(self.color_pinF, bootstyle='light', text='     ', command=lambda: self.color_pinVAR.set('light'))
-        self.color_pin_lightB.grid(row=0, column=2, padx=5, pady=10, sticky='nsew')
-        self.color_pin_successB = Button(self.color_pinF, bootstyle='success', text='     ', command=lambda: self.color_pinVAR.set('success'))
-        self.color_pin_successB.grid(row=0, column=3, padx=5, pady=10, sticky='nsew')
-        self.color_pin_dangerB = Button(self.color_pinF, bootstyle='danger', text='     ', command=lambda: self.color_pinVAR.set('danger'))
-        self.color_pin_dangerB.grid(row=0, column=4, padx=5, pady=10, sticky='nsew')
-        self.color_pin_warningB = Button(self.color_pinF, bootstyle='warning', text='     ', command=lambda: self.color_pinVAR.set('warning'))
-        self.color_pin_warningB.grid(row=0, column=5, padx=5, pady=10, sticky='nsew')
-        self.color_pin_infoB = Button(self.color_pinF, bootstyle='info', text='     ', command=lambda: self.color_pinVAR.set('info'))
-        self.color_pin_infoB.grid(row=0, column=6, padx=5, pady=10, sticky='nsew')
-        self.color_pin_primaryB = Button(self.color_pinF, bootstyle='primary', text='     ', command=lambda: self.color_pinVAR.set('primary'))
-        self.color_pin_primaryB.grid(row=0, column=7, padx=5, pady=10, sticky='nsew')
+        colors = ['dark', 'secondary', 'light', 'success', 'danger', 'warning', 'info', 'primary']
+        for i, c in enumerate(colors):
+            Button(self.color_pinF, bootstyle=c, text='     ',
+                   command=lambda c=c: self.color_pinVAR.set(c)).grid(row=0, column=i, padx=5, pady=10, sticky='nsew')
 
-        self.color_pin_toolF = Frame(self.color_pinF, bootstyle='default')
-        self.color_pin_toolF.grid(row=1, column=0, columnspan=8, sticky='nsew')
+        tool = Frame(self.color_pinF, bootstyle='default')
+        tool.grid(row=1, column=0, columnspan=8, sticky='nsew')
+        Button(tool, text='Go', bootstyle='primary', command=self.color_pin_go).pack(padx=20, pady=5, fill='x')
+        Button(tool, text='X Close', bootstyle='primary outline',
+               command=lambda: self.color_pinF.destroy()).pack(padx=20, pady=5, fill='x')
 
-        self.color_pin_goL = Button(self.color_pin_toolF, text='Go', bootstyle='primary', command=lambda: self.color_pin_go())
-        self.color_pin_goL.pack(padx=20, pady=5, fill=X)
-
-        self.color_pin_closeL = Button(self.color_pin_toolF, text='X Close', bootstyle='primary outline', command=lambda: self.color_pinF.destroy())
-        self.color_pin_closeL.pack(padx=20, pady=5, fill=X)
     def color_pin_go(self):
         conn_user000 = sqlite3.connect('user000.db')
         c_user000 = conn_user000.cursor()
-        c_user000.execute("""UPDATE corkboard SET color='{}' WHERE rowid='{}' """.format(self.color_pinVAR.get(), self.rowid))
+        c_user000.execute("UPDATE corkboard SET color=? WHERE rowid=?", (self.color_pinVAR.get(), self.rowid))
         conn_user000.commit()
         self.color_pinF.destroy()
         corkboard_design()
 
         #print(f'#: {self.rowid}\nTitle: {self.title}\nTitle: {self.title}\nActual: {self.actual}\nColor: {self.color}')
 def corkboard_design():
-    global backFrame, tasks_frame, current_design, tasksleftL
+    global backFrame, current_design, tasksleftL, cork_pinsF
     tasksleftL.configure(text='          Corkboard')
     clear_board()
     current_design = 'corkboard'
-    tasks_frame.pack(fill=BOTH, expand=True)
 
-    corkboardheaderL = Label(tasks_frame, text='C o r k b o a r d', font=('Calibri', 40, 'bold'), bootstyle='warning')
+    cork_topF = Frame(backFrame, bootstyle='default')
+    cork_topF.pack(fill=X)
+
+    corkboardheaderL = Label(cork_topF, text='C o r k b o a r d', font=('Calibri', 40, 'bold'), bootstyle='warning')
     corkboardheaderL.pack()
 
-    corkboardsubheaderL = Label(tasks_frame, text='Organize your miscellanous thoughts quickly & easily.', font=('Calibri', 20), bootstyle='light')
+    corkboardsubheaderL = Label(cork_topF, text='Organize your miscellanous thoughts quickly & easily.', font=('Calibri', 20), bootstyle='light')
     corkboardsubheaderL.pack()
 
-    cork_toolbarF = Frame(tasks_frame, bootstyle='dark')
-    cork_toolbarF.pack(fill=BOTH, expand=True, padx=20, pady=20)
+    cork_toolbarF = Frame(cork_topF, bootstyle='dark')
+    cork_toolbarF.pack(fill=X, padx=20, pady=20)
 
     corkboardaddpinL = Button(cork_toolbarF, text='+ Add Pin', bootstyle='light outline', command=lambda: add_pin())
-    corkboardaddpinL.grid(row=0,column=0, padx=10, pady=10)
+    corkboardaddpinL.grid(row=0, column=0, padx=10, pady=10)
 
-    Separator(tasks_frame, bootstyle='warning').pack(fill=X)
+    Separator(cork_topF, bootstyle='warning').pack(fill=X)
 
-    global cork_pinsF
-    cork_pinsF = Frame(tasks_frame, bootstyle='default')
-    cork_pinsF.pack(fill=BOTH, expand=True, padx=20, pady=20)
+    cork_pinsF = FreeformCorkboard(backFrame, on_position_change=sql_process.update_pin_position)
+    cork_pinsF.pack(fill="both", expand=True, pady=8, padx=8)
 
     conn_user000 = sqlite3.connect('user000.db')
     c_user000 = conn_user000.cursor()
@@ -1216,13 +1322,14 @@ def add_pin_go(title, actual, color):
     global add_pinF
     conn_user000 = sqlite3.connect('user000.db')
     c_user000 = conn_user000.cursor()
-    c_user000.execute("""INSERT INTO corkboard VALUES (?,?,?)""", (title, actual, color))
+    content_json = json.dumps({'text': actual, 'runs': []})
+    c_user000.execute(
+        "INSERT INTO corkboard (title, actual, color, content_json) VALUES (?,?,?,?)",
+        (title, actual, color, content_json)
+    )
     conn_user000.commit()
-
     add_pinF.destroy()
-
     corkboard_design()
-
 global searchingdot
 searchingdot = 'no'
 def searchthroughlistopen():
@@ -2087,51 +2194,7 @@ def resize_side(e=None):
     width = root.winfo_width()
     try:
         if current_design == 'home':
-            if width > 1701:
-                if homewidgetsize != 5:
-                    meterwidgetF.grid(row=0, column=0, pady=30, padx=30, sticky='nsew')
-                    clockwidgetF.grid(row=0, column=1, pady=30, padx=0, sticky='nsew')
-                    alltaskseqlF.grid(row=0, column=2, pady=30, padx=30, sticky='nsew')
-                    displistF.grid(row=0, column=3, pady=30, padx=0, sticky='nsew')
-                    quicksettF.grid(row=0, column=5, pady=30, padx=30, sticky='nsew')
-                    print('biggest')
-                    homewidgetsize=5
-            elif width > 1401 and width < 1700:
-                if homewidgetsize != 4:
-                    meterwidgetF.grid(row=0, column=0, pady=30, padx=30, sticky='nsew')
-                    clockwidgetF.grid(row=0, column=1, pady=30, padx=0, sticky='nsew')
-                    alltaskseqlF.grid(row=0, column=2, pady=30, padx=30, sticky='nsew')
-                    displistF.grid(row=0, column=3, pady=30, padx=0, sticky='nsew')
-                    quicksettF.grid(row=1, column=0, pady=0, padx=30, sticky='nsew')
-                    print('bigger')
-                    homewidgetsize=4
-            elif width > 1001 and width < 1400:
-                if homewidgetsize != 3:
-                    meterwidgetF.grid(row=0, column=0, pady=30, padx=30, sticky='nsew')
-                    clockwidgetF.grid(row=0, column=1, pady=30, padx=0, sticky='nsew')
-                    alltaskseqlF.grid(row=0, column=2, pady=30, padx=30, sticky='nsew')
-                    displistF.grid(row=1, column=0, pady=0, padx=30, sticky='nsew')
-                    quicksettF.grid(row=1, column=1, pady=0, padx=0, sticky='nsew')
-                    print('big')
-                    homewidgetsize=3
-            elif width < 1000 and width > 700:
-                if homewidgetsize != 2:
-                    meterwidgetF.grid(row=0, column=0, pady=30, padx=30, sticky='nsew')
-                    clockwidgetF.grid(row=0, column=1, pady=30, padx=0, sticky='nsew')
-                    alltaskseqlF.grid(row=1, column=0, pady=0, padx=30, sticky='nsew')
-                    displistF.grid(row=1, column=1, pady=0, padx=0, sticky='nsew')
-                    quicksettF.grid(row=2, column=0, pady=30, padx=30, sticky='nsew')
-                    print('small')
-                    homewidgetsize=2
-            elif width < 700:
-                if homewidgetsize != 1:
-                    meterwidgetF.grid(row=0, column=0, pady=0, padx=30, sticky='nsew')
-                    clockwidgetF.grid(row=1, column=0, pady=30, padx=30, sticky='nsew')
-                    alltaskseqlF.grid(row=2, column=0, pady=0, padx=30, sticky='nsew')
-                    displistF.grid(row=3, column=0, pady=30, padx=30, sticky='nsew')
-                    quicksettF.grid(row=4, column=0, pady=0, padx=30, sticky='nsew')
-                    print('tiny')
-                    homewidgetsize=1
+            on_home_resize()
         elif current_design == 'tasks':
             if width > 1201:
                 if taskstopbarsize != 'showall':
@@ -2251,6 +2314,11 @@ def about():
 
     aboutheaderL = Label(tasks_frame, text='About', font=('Calibri', 50, 'bold'), bootstyle='danger')
     aboutheaderL.pack()
+
+    aboutlatestversion_text = ScrolledText(tasks_frame, font=('Calibri', 10), wrap='word')
+    aboutlatestversion_text.pack(padx=30, pady=15)
+    aboutlatestversion_text.insert(END, f'Latest Version: {sql_process.check_setting("version")}')
+    aboutlatestversion_text.config(state='disabled')
 
     aboutsubheaderL = Label(tasks_frame, text='Created by: Dovid Stahler', font=('Calibri', 20), bootstyle='info')
     aboutsubheaderL.pack()
@@ -2698,7 +2766,7 @@ def attemptunlockpswdman(attempt):
 main_headerF = Frame(bootstyle='default')
 main_headerF.pack(fill=X)
 
-welcomeheaderL = Label(main_headerF, text='Welcome back!', font=('Calibri', 40, 'bold'), bootstyle='Default')
+welcomeheaderL = Label(main_headerF, text='Good to see ya!', font=('Calibri', 40, 'bold'), bootstyle='Default')
 welcomeheaderL.grid(row=0, column=0, padx=5)
 
 search_style = Style()

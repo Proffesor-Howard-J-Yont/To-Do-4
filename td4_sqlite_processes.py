@@ -26,10 +26,47 @@ def create_table2():
     c_user000.execute('''CREATE TABLE corkboard (
         title text,
         actual text,
-        color text
+        color text,
+        position_x real,
+        position_y real
         )''')
     print('Command executed successfully!')
     conn_user000.commit()
+
+
+def migrate_corkboard_positions():
+    c_user000.execute("PRAGMA table_info(corkboard)")
+    existing_cols = [col[1] for col in c_user000.fetchall()]
+    if 'position_x' not in existing_cols:
+        c_user000.execute("ALTER TABLE corkboard ADD COLUMN position_x REAL")
+    if 'position_y' not in existing_cols:
+        c_user000.execute("ALTER TABLE corkboard ADD COLUMN position_y REAL")
+    conn_user000.commit()
+
+def update_pin_position(rowid, x, y):
+    c_user000.execute(
+        "UPDATE corkboard SET position_x=?, position_y=? WHERE rowid=?",
+        (x, y, rowid)
+    )
+    conn_user000.commit()
+
+def migrate_corkboard_content():
+    c_user000.execute("PRAGMA table_info(corkboard)")
+    existing_cols = [col[1] for col in c_user000.fetchall()]
+    if 'content_json' not in existing_cols:
+        c_user000.execute("ALTER TABLE corkboard ADD COLUMN content_json TEXT")
+    if 'image_path' not in existing_cols:
+        c_user000.execute("ALTER TABLE corkboard ADD COLUMN image_path TEXT")
+    conn_user000.commit()
+
+def update_pin_content(rowid, title, content_json, image_path):
+    c_user000.execute(
+        "UPDATE corkboard SET title=?, content_json=?, image_path=? WHERE rowid=?",
+        (title, content_json, image_path, rowid)
+    )
+    conn_user000.commit()
+
+
 def add_list(displayname):
     newdisplayname1 = displayname.strip(' ')
     if newdisplayname1 != '':# and len(newdisplayname1) < 16:
@@ -109,11 +146,13 @@ def delete_setting(initials):
     for artifact in collection:
         print(artifact)
 
+
 #c.execute('''ALTER TABLE customers RENAME TO `{}`'''.format())
 #conn.commit()
-#c.execute('''SELECT * FROM sqlite_master WHERE type='table' ''')
-#sdfh = c.fetchall()
+#c_user000.execute('''SELECT * FROM sqlite_master WHERE type='table' ''')
+#sdfh = c_user000.fetchall()
 #for asdf in sdfh:
 #    print(asdf[4])
 #def_folder, customers
-print('Welcome to the To-Do 4 Sqlite3 Processes Hub!\nYou can reach me at dovidstahler9@gmail.com.')
+
+#print('Welcome to the To-Do 4 Sqlite3 Processes Hub!\nYou can reach me at dovidstahler9@gmail.com.')
