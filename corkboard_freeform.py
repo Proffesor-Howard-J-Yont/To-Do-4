@@ -1,61 +1,47 @@
 """
 corkboard_freeform.py
 
-A scrollable, freeform pin board for To-Do 4's Corkboard feature.
+Scrollable, freeform pin board.
 
-Design (agreed with user):
-- Pins live at ABSOLUTE pixel coordinates in a fixed "board space" that is
-  independent of the window/viewport size. Resizing the window (or moving to
-  a smaller monitor) never moves a pin -- it only changes how much of the
-  board is currently visible.
-- The board starts at a default size and GROWS on demand (rightward/downward
-  only) whenever a pin needs room that doesn't exist yet. It never shrinks.
-  Top/left are hard boundaries (no negative coordinates).
-- No zoom. Pins are always rendered at a fixed pixel size, so text never
-  needs to be rescaled.
-- Dragging a pin that would overlap a neighbor SLIDES along whichever axis
-  is still free, rather than freezing dead or overlapping.
-- Position is only ever changed by: (a) initial placement/backfill, or
-  (b) the user dragging the pin. Nothing else touches it.
-
-This module is intentionally decoupled from the rest of the app: it doesn't
-know about sqlite, ttkbootstrap styles, or what a "pin" looks like. You pass
-in a `build_frame_fn` per pin that builds whatever visual content you want,
-and a callback that gets called (rowid, x, y) whenever a pin's position
-changes and should be persisted.
+Changes in this version:
+- Pins distinguish a CLICK (opens the pin) from a DRAG (moves the pin) using
+  a small movement threshold measured from mouse-down to mouse-up.
+- The board's logical size is no longer grow-only. It's recalculated after
+  every add/move/delete as: max(current viewport size, bounding box of all
+  pins + margin). This means it can shrink back down once pins that were
+  pushing the boundary out are deleted or dragged inward -- but an existing
+  pin's position is NEVER changed by this recalculation. Only the boundary
+  (and therefore how much can be scrolled) changes.
+- Small directional arrow indicators float over the canvas (fixed to the
+  screen, not the scrollable board) on any edge that currently has a pin
+  positioned outside the visible viewport. Clicking one scrolls toward it.
 """
 
+import math
 import tkinter as tk
-from ttkbootstrap import Frame, Scrollbar
+from ttkbootstrap import Frame, Scrollbar, Label
 
 PIN_WIDTH = 240
 PIN_HEIGHT = 140
-PIN_MARGIN = 12          # min gap enforced between pins during collision checks
-BOARD_DEFAULT_W = 2400
-BOARD_DEFAULT_H = 1600
-BOARD_GROW_STEP = 600    # how much extra room to add each time the board grows
+PIN_MARGIN = 12
+CLICK_MOVE_THRESHOLD = 6  # px of movement before a press+release counts as a drag, not a click
 
 
 class FreeformCorkboard(Frame):
-    """
-    Scrollable freeform board. Pins are widgets embedded in a tk.Canvas via
-    create_window, positioned at absolute board-space coordinates.
-    """
-
     def __init__(self, master, on_position_change=None, **kwargs):
         """
-        on_position_change: callback(rowid, x, y) invoked on drag release,
-        so the caller can persist the new position (e.g. to sqlite).
+        on_position_change: callback(rowid, x, y), called on drag release.
+        Per-pin on_click callbacks are supplied individually via add_pin().
         """
         super().__init__(master, **kwargs)
         self.on_position_change = on_position_change
 
-        self.board_w = BOARD_DEFAULT_W
-        self.board_h = BOARD_DEFAULT_H
+        self.board_w = 0
+        self.board_h = 0
 
         self.canvas = tk.Canvas(self, highlightthickness=0, background='#222222')
-        self.vbar = Scrollbar(self, orient='vertical', command=self.canvas.yview)
-        self.hbar = Scrollbar(self, orient='horizontal', command=self.canvas.xview)
+        self.vbar = Scrollbar(self, orient='vertical', command=self._yview)
+        self.hbar = Scrollbar(self, orient='horizontal', command=self._xview)
         self.canvas.configure(yscrollcommand=self.vbar.set, xscrollcommand=self.hbar.set)
 
         self.canvas.grid(row=0, column=0, sticky='nsew')
@@ -64,27 +50,49 @@ class FreeformCorkboard(Frame):
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
-        self.canvas.configure(scrollregion=(0, 0, self.board_w, self.board_h))
-
-        # rowid -> {'frame': Frame, 'window_id': int, 'x': int, 'y': int}
+        # rowid -> {'frame','window_id','x','y','on_click'}
         self.pins = {}
-        self._drag = {'rowid': None, 'start_x': 0, 'start_y': 0, 'orig_x': 0, 'orig_y': 0}
+        self._drag = {'rowid': None, 'start_x': 0, 'start_y': 0,
+                       'orig_x': 0, 'orig_y': 0, 'moved': 0}
+
+        self._arrows = {}  # side -> Label widget
+        self._suppress_click = set()  # rowids whose next release shouldn't open the pin
+
+        self.canvas.bind('<Configure>', lambda e: self._recompute_board_bounds())
+
+    def suppress_click(self, rowid):
+        """
+        Call this from a child widget's own click handler (e.g. a hyperlink
+        tag inside a pin's Text widget) BEFORE it does its own thing, so the
+        pin-level on_click (open the pin) doesn't also fire for that same
+        click. Consumed automatically on the next release for that pin.
+        """
+        self._suppress_click.add(rowid)
+
+    # ---------------- scroll wrappers (so arrows refresh on manual scroll) ----------------
+
+    def _yview(self, *args):
+        self.canvas.yview(*args)
+        self._update_edge_arrows()
+
+    def _xview(self, *args):
+        self.canvas.xview(*args)
+        self._update_edge_arrows()
 
     # ---------------- board sizing ----------------
 
-    def _grow_board(self, need_w=None, need_h=None):
-        """Extend the board rightward/downward if the given need exceeds
-        current bounds. Never shrinks, never touches existing pin positions."""
-        grew = False
-        if need_w is not None and need_w > self.board_w:
-            self.board_w = need_w + BOARD_GROW_STEP
-            grew = True
-        if need_h is not None and need_h > self.board_h:
-            self.board_h = need_h + BOARD_GROW_STEP
-            grew = True
-        if grew:
-            self.canvas.configure(scrollregion=(0, 0, self.board_w, self.board_h))
-        return grew
+    def _recompute_board_bounds(self):
+        viewport_w = self.canvas.winfo_width() or 800
+        viewport_h = self.canvas.winfo_height() or 600
+        max_x = viewport_w
+        max_y = viewport_h
+        for pin in self.pins.values():
+            max_x = max(max_x, pin['x'] + PIN_WIDTH + PIN_MARGIN)
+            max_y = max(max_y, pin['y'] + PIN_HEIGHT + PIN_MARGIN)
+        self.board_w = max_x
+        self.board_h = max_y
+        self.canvas.configure(scrollregion=(0, 0, self.board_w, self.board_h))
+        self._update_edge_arrows()
 
     # ---------------- collision ----------------
 
@@ -99,50 +107,33 @@ class FreeformCorkboard(Frame):
         return False
 
     def _find_free_spot(self):
-        """Scan the board for the first non-overlapping spot (row-major).
-        Grows the board downward if nothing is found."""
         step_x = PIN_WIDTH + PIN_MARGIN
         step_y = PIN_HEIGHT + PIN_MARGIN
+        search_h = max(self.board_h, self.canvas.winfo_height() or 600)
+        search_w = max(self.board_w, self.canvas.winfo_width() or 800)
         y = PIN_MARGIN
-        while y + PIN_HEIGHT <= self.board_h:
+        while True:
             x = PIN_MARGIN
-            while x + PIN_WIDTH <= self.board_w:
+            while x + PIN_WIDTH <= search_w:
                 if not self._overlaps(x, y, PIN_WIDTH, PIN_HEIGHT):
                     return x, y
                 x += step_x
             y += step_y
-        # board is full: grow downward and place there
-        new_y = self.board_h + PIN_MARGIN
-        self._grow_board(need_h=new_y + PIN_HEIGHT)
-        return PIN_MARGIN, new_y
+            if y + PIN_HEIGHT > search_h * 4:  # generous safety cap, avoids any infinite loop
+                return PIN_MARGIN, search_h + PIN_MARGIN
 
     def _resolve_slide(self, rowid, cur_x, cur_y, target_x, target_y):
-        """
-        Try the full diagonal move first; if blocked, try each axis alone,
-        producing a "slide along the free axis" feel. If both axes are
-        blocked, try growing the board in the blocked direction; only if
-        that's not applicable (e.g. blocked by another pin, not an edge)
-        does the pin stay put.
-        """
         if not self._overlaps(target_x, target_y, PIN_WIDTH, PIN_HEIGHT, ignore_rowid=rowid):
             return target_x, target_y
-
         if not self._overlaps(target_x, cur_y, PIN_WIDTH, PIN_HEIGHT, ignore_rowid=rowid):
             return target_x, cur_y
-
         if not self._overlaps(cur_x, target_y, PIN_WIDTH, PIN_HEIGHT, ignore_rowid=rowid):
             return cur_x, target_y
-
         return cur_x, cur_y
 
     # ---------------- pin management ----------------
 
-    def add_pin(self, rowid, build_frame_fn, x=None, y=None):
-        """
-        build_frame_fn(parent) -> Frame: builds the pin's visual content.
-        x, y: pass explicit board-space coords (e.g. loaded from the DB) or
-        leave None to auto-place in the first free spot (new pin / backfill).
-        """
+    def add_pin(self, rowid, build_frame_fn, x=None, y=None, on_click=None):
         if x is None or y is None:
             x, y = self._find_free_spot()
 
@@ -151,18 +142,23 @@ class FreeformCorkboard(Frame):
         window_id = self.canvas.create_window(
             x, y, anchor='nw', window=frame, width=PIN_WIDTH, height=PIN_HEIGHT
         )
-        self.pins[rowid] = {'frame': frame, 'window_id': window_id, 'x': x, 'y': y}
-
-        self._grow_board(need_w=x + PIN_WIDTH + PIN_MARGIN, need_h=y + PIN_HEIGHT + PIN_MARGIN)
+        self.pins[rowid] = {'frame': frame, 'window_id': window_id, 'x': x, 'y': y,
+                             'on_click': on_click}
 
         self._bind_drag(frame, rowid)
+        self._recompute_board_bounds()
         return frame, x, y
+
+    def remove_pin(self, rowid):
+        pin = self.pins.pop(rowid, None)
+        if pin:
+            self.canvas.delete(pin['window_id'])
+            self._recompute_board_bounds()
 
     def _bind_drag(self, widget, rowid):
         widget.bind('<ButtonPress-1>', lambda e: self._on_press(e, rowid))
         widget.bind('<B1-Motion>', lambda e: self._on_drag(e, rowid))
         widget.bind('<ButtonRelease-1>', lambda e: self._on_release(e, rowid))
-        # bind children too, so grabbing a label/title inside the pin also drags it
         for child in widget.winfo_children():
             self._bind_drag(child, rowid)
 
@@ -173,36 +169,96 @@ class FreeformCorkboard(Frame):
         self._drag['start_y'] = event.y_root
         self._drag['orig_x'] = pin['x']
         self._drag['orig_y'] = pin['y']
+        self._drag['moved'] = 0
         self.canvas.tag_raise(pin['window_id'])
 
     def _on_drag(self, event, rowid):
         pin = self.pins[rowid]
         dx = event.x_root - self._drag['start_x']
         dy = event.y_root - self._drag['start_y']
-        target_x = self._drag['orig_x'] + dx
-        target_y = self._drag['orig_y'] + dy
+        self._drag['moved'] = max(self._drag['moved'], math.hypot(dx, dy))
 
-        # hard boundary: no negative coordinates (top/left out of scope for growth)
-        target_x = max(0, target_x)
-        target_y = max(0, target_y)
+        target_x = max(0, self._drag['orig_x'] + dx)
+        target_y = max(0, self._drag['orig_y'] + dy)
 
         new_x, new_y = self._resolve_slide(rowid, pin['x'], pin['y'], target_x, target_y)
-
         pin['x'], pin['y'] = new_x, new_y
         self.canvas.coords(pin['window_id'], new_x, new_y)
-
-        self._grow_board(
-            need_w=new_x + PIN_WIDTH + PIN_MARGIN,
-            need_h=new_y + PIN_HEIGHT + PIN_MARGIN,
-        )
+        self._recompute_board_bounds()
 
     def _on_release(self, event, rowid):
         pin = self.pins.get(rowid)
+        if not pin:
+            return
+        was_click = self._drag['moved'] < CLICK_MOVE_THRESHOLD
         self._drag['rowid'] = None
-        if pin and self.on_position_change:
-            self.on_position_change(rowid, pin['x'], pin['y'])
+
+        if rowid in self._suppress_click:
+            self._suppress_click.discard(rowid)
+            return
+
+        if was_click:
+            if pin['on_click']:
+                pin['on_click'](rowid)
+        else:
+            if self.on_position_change:
+                self.on_position_change(rowid, pin['x'], pin['y'])
+
+    # ---------------- off-screen edge arrows ----------------
+
+    def _update_edge_arrows(self):
+        if self.board_w == 0 or self.board_h == 0:
+            return
+        x0, x1 = self.canvas.xview()
+        y0, y1 = self.canvas.yview()
+        vis_left = x0 * self.board_w
+        vis_right = x1 * self.board_w
+        vis_top = y0 * self.board_h
+        vis_bottom = y1 * self.board_h
+
+        needed = {'up': False, 'down': False, 'left': False, 'right': False}
+        for pin in self.pins.values():
+            px, py = pin['x'], pin['y']
+            if py + PIN_HEIGHT < vis_top:
+                needed['up'] = True
+            if py > vis_bottom:
+                needed['down'] = True
+            if px + PIN_WIDTH < vis_left:
+                needed['left'] = True
+            if px > vis_right:
+                needed['right'] = True
+
+        specs = {
+            'up': ('\u25B2', dict(relx=0.5, rely=0.0, anchor='n')),
+            'down': ('\u25BC', dict(relx=0.5, rely=1.0, anchor='s')),
+            'left': ('\u25C0', dict(relx=0.0, rely=0.5, anchor='w')),
+            'right': ('\u25B6', dict(relx=1.0, rely=0.5, anchor='e')),
+        }
+        for side, need in needed.items():
+            if need and side not in self._arrows:
+                symbol, place_kwargs = specs[side]
+                lbl = Label(self, text=symbol, bootstyle='warning inverse', font=('Calibri', 16, 'bold'))
+                lbl.place(**place_kwargs)
+                lbl.bind('<Button-1>', lambda e, s=side: self._scroll_toward(s))
+                self._arrows[side] = lbl
+            elif not need and side in self._arrows:
+                self._arrows[side].destroy()
+                del self._arrows[side]
+
+    def _scroll_toward(self, side):
+        if side == 'up':
+            self.canvas.yview_scroll(-1, 'pages')
+        elif side == 'down':
+            self.canvas.yview_scroll(1, 'pages')
+        elif side == 'left':
+            self.canvas.xview_scroll(-1, 'pages')
+        elif side == 'right':
+            self.canvas.xview_scroll(1, 'pages')
+        self._update_edge_arrows()
 
     def clear(self):
-        """Wipe all pins (call before rebuilding the board, e.g. on refresh)."""
         self.canvas.delete('all')
         self.pins = {}
+        for lbl in self._arrows.values():
+            lbl.destroy()
+        self._arrows = {}

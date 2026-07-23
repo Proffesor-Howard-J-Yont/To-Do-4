@@ -9,12 +9,13 @@ import sqlite3
 from tkinter import filedialog
 import time
 import td4_sqlite_processes as sql_process
+sql_process.migrate_corkboard_schema()
 sql_process.migrate_corkboard_positions()
 #from win10toast import ToastNotifier
 import random as rd
 from corkboard_freeform import FreeformCorkboard, PIN_WIDTH, PIN_HEIGHT
 import json
-from corkboard_rich_text import build_pin_preview, open_pin_editor
+from corkboard_rich_text import build_pin_preview, open_pin_view, open_pin_editor, delete_image_file
 sql_process.migrate_corkboard_content()
 
 #  COLORS
@@ -29,7 +30,7 @@ return2_ = 'False'
 undone_tasks = 0
 root = Window(themename='darkly')
 # vapor, cyborg, minty, lumen, darkly, superhero
-root.title("To-Do 4.3 Beta - A new and innovative tasks organizer. - Corkboard Update 2.1.0")
+root.title("To-Do 4.3 Beta - A new and innovative tasks organizer. - Corkboard Update 2.2.0")
 root.geometry('1200x800+300+100')
 root.iconbitmap('icon.ico')
 
@@ -757,6 +758,8 @@ def delzonego(listsyn, corkboardyn):
         refresh(return_='False')
     if corkboardyn == 1:
         print('See ya around!')
+        for path in sql_process.get_all_image_paths():
+            delete_image_file(path)
         conn_user000 = sqlite3.connect('user000.db')
         c_user000 = conn_user000.cursor()
         c_user000.execute('''DELETE FROM corkboard''')
@@ -1172,74 +1175,48 @@ class display_pin:
         global cork_pinsF, root
         self.rowid = pin[0]
         self.title = pin[1]
-        self.actual = pin[2]        # legacy plain-text column, used only for one-time backfill
+        self.actual = pin[2]
         self.color = pin[3]
         self.position_x = pin[4]
         self.position_y = pin[5]
         self.content_json = pin[6]
         self.image_path = pin[7]
 
-        # one-time backfill: older pins have no content_json yet -- build a
-        # plain (unformatted) one from the legacy `actual` text column.
-        if not self.content_json:
+        if not self.content_json:  # one-time backfill for pins from before this update
             backfilled = json.dumps({'text': self.actual or '', 'runs': []})
             sql_process.update_pin_content(self.rowid, self.title, backfilled, self.image_path)
             self.content_json = backfilled
 
         def build(parent):
             return build_pin_preview(
-                parent, root, self.rowid, self.title, self.color,
-                self.content_json, self.image_path,
-                on_expand=self.expand, on_color=self.color_pin, on_delete=self.delete_pin,
-                pin_width=PIN_WIDTH, pin_height=PIN_HEIGHT
+                parent, root, cork_pinsF, self.rowid, self.title, self.color,
+                self.content_json, self.image_path, PIN_WIDTH, PIN_HEIGHT
             )
 
         frame, placed_x, placed_y = cork_pinsF.add_pin(
-            self.rowid, build, x=self.position_x, y=self.position_y
+            self.rowid, build, x=self.position_x, y=self.position_y,
+            on_click=self.open_view
         )
         if self.position_x is None or self.position_y is None:
             sql_process.update_pin_position(self.rowid, placed_x, placed_y)
 
-    def expand(self, rowid):
-        def save(rowid, new_title, new_content_json, new_image_path):
-            sql_process.update_pin_content(rowid, new_title, new_content_json, new_image_path)
-            corkboard_design()
-        open_pin_editor(root, self.rowid, self.title, self.content_json, self.image_path, save)
+    def open_view(self, rowid):
+        open_pin_view(root, self.rowid, self.title, self.content_json, self.image_path,
+                       on_edit=self.open_edit)
 
-    def delete_pin(self, rowid):
-        conn_user000 = sqlite3.connect('user000.db')
-        c_user000 = conn_user000.cursor()
-        c_user000.execute("DELETE FROM corkboard WHERE rowid=?", (self.rowid,))
-        conn_user000.commit()
+    def open_edit(self, rowid):
+        open_pin_editor(root, self.rowid, self.title, self.content_json, self.image_path,
+                         self.color, on_save=self._save, on_delete=self._delete)
+
+    def _save(self, rowid, new_title, new_content_json, new_image_path, new_color):
+        sql_process.update_pin_content(rowid, new_title, new_content_json, new_image_path)
+        sql_process.update_pin_color(rowid, new_color)
         corkboard_design()
 
-    def color_pin(self, rowid):
-        self.color_pinVAR = StringVar()
-        self.color_pinVAR.set(self.color)
-
-        self.color_pinF = Frame(root, bootstyle='default')
-        self.color_pinF.place(in_=root, anchor='c', relx=.5, rely=.5)
-
-        colors = ['dark', 'secondary', 'light', 'success', 'danger', 'warning', 'info', 'primary']
-        for i, c in enumerate(colors):
-            Button(self.color_pinF, bootstyle=c, text='     ',
-                   command=lambda c=c: self.color_pinVAR.set(c)).grid(row=0, column=i, padx=5, pady=10, sticky='nsew')
-
-        tool = Frame(self.color_pinF, bootstyle='default')
-        tool.grid(row=1, column=0, columnspan=8, sticky='nsew')
-        Button(tool, text='Go', bootstyle='primary', command=self.color_pin_go).pack(padx=20, pady=5, fill='x')
-        Button(tool, text='X Close', bootstyle='primary outline',
-               command=lambda: self.color_pinF.destroy()).pack(padx=20, pady=5, fill='x')
-
-    def color_pin_go(self):
-        conn_user000 = sqlite3.connect('user000.db')
-        c_user000 = conn_user000.cursor()
-        c_user000.execute("UPDATE corkboard SET color=? WHERE rowid=?", (self.color_pinVAR.get(), self.rowid))
-        conn_user000.commit()
-        self.color_pinF.destroy()
+    def _delete(self, rowid, image_path):
+        delete_image_file(image_path)
+        sql_process.delete_pin(rowid)
         corkboard_design()
-
-        #print(f'#: {self.rowid}\nTitle: {self.title}\nTitle: {self.title}\nActual: {self.actual}\nColor: {self.color}')
 def corkboard_design():
     global backFrame, current_design, tasksleftL, cork_pinsF
     tasksleftL.configure(text='          Corkboard')
@@ -1264,7 +1241,7 @@ def corkboard_design():
     Separator(cork_topF, bootstyle='warning').pack(fill=X)
 
     cork_pinsF = FreeformCorkboard(backFrame, on_position_change=sql_process.update_pin_position)
-    cork_pinsF.pack(fill="both", expand=True, pady=8, padx=8)
+    cork_pinsF.pack(fill="both", expand=True, padx=8, pady=8)
 
     conn_user000 = sqlite3.connect('user000.db')
     c_user000 = conn_user000.cursor()
@@ -1275,61 +1252,49 @@ def corkboard_design():
         display_pin(pin)
 def add_pin():
     global add_pinF
-    add_pin_colorVAR = StringVar()
-    add_pin_colorVAR.set('dark')
-
     add_pinF = Frame(root, bootstyle='default')
     add_pinF.place(in_=root, anchor='c', relx=.5, rely=.5)
 
-    add_pinheaderL = Label(add_pinF, text='Add Pin', font=('Calibri', 25, 'bold'))
-    add_pinheaderL.pack(padx=20, pady=5)
+    Label(add_pinF, text='New Pin', font=('Calibri', 20, 'bold')).pack(padx=20, pady=10)
+    Label(add_pinF, text='Title:', font=('Calibri', 14)).pack(padx=10)
+    title_E = Entry(add_pinF, font=('Calibri', 15), width=20)
+    title_E.pack(padx=10, pady=10)
+    title_E.focus_force()
 
-    add_pin_titleF = LabelFrame(add_pinF, text='Title', bootstyle='default')
-    add_pin_titleF.pack(padx=10, pady=10, fill=X)
-    add_pin_titleE = Entry(add_pin_titleF, font=('Calibri', 15), width=15)
-    add_pin_titleE.pack(padx=5, pady=15, fill=X)
+    def confirm(event=None):
+        add_pin_go(title_E.get().strip() or 'Untitled')
 
-    add_pin_actualF = LabelFrame(add_pinF, text='Notes', bootstyle='default')
-    add_pin_actualF.pack(padx=10, pady=10, fill=X)
-    add_pin_actualE = Entry(add_pin_actualF, font=('Calibri', 15), width=15)
-    add_pin_actualE.pack(padx=5, pady=15, fill=X)
+    title_E.bind('<Return>', confirm)
+    Button(add_pinF, text='Create', bootstyle='primary', command=confirm).pack(fill=X, padx=20, pady=5)
+    Button(add_pinF, text='X Close', bootstyle='primary outline',
+           command=lambda: add_pinF.destroy()).pack(fill=X, padx=20, pady=5)
 
-    add_pin_colorsF = LabelFrame(add_pinF, text='Color', bootstyle='default')
-    add_pin_colorsF.pack(padx=10, pady=5)
-    add_pin_darkB = Button(add_pin_colorsF, bootstyle='dark', text='     ', command=lambda: add_pin_colorVAR.set('dark'))
-    add_pin_darkB.grid(row=0, column=0, padx=5, pady=10, sticky='nsew')
-    add_pin_secondaryB = Button(add_pin_colorsF, bootstyle='secondary', text='   ', command=lambda: add_pin_colorVAR.set('secondary'))
-    add_pin_secondaryB.grid(row=0, column=1, padx=5, pady=10, sticky='nsew')
-    add_pin_lightB = Button(add_pin_colorsF, bootstyle='light', text='     ', command=lambda: add_pin_colorVAR.set('light'))
-    add_pin_lightB.grid(row=0, column=2, padx=5, pady=10, sticky='nsew')
-    add_pin_successB = Button(add_pin_colorsF, bootstyle='success', text='     ', command=lambda: add_pin_colorVAR.set('success'))
-    add_pin_successB.grid(row=0, column=3, padx=5, pady=10, sticky='nsew')
-    add_pin_dangerB = Button(add_pin_colorsF, bootstyle='danger', text='     ', command=lambda: add_pin_colorVAR.set('danger'))
-    add_pin_dangerB.grid(row=0, column=4, padx=5, pady=10, sticky='nsew')
-    add_pin_warningB = Button(add_pin_colorsF, bootstyle='warning', text='     ', command=lambda: add_pin_colorVAR.set('warning'))
-    add_pin_warningB.grid(row=0, column=5, padx=5, pady=10, sticky='nsew')
-    add_pin_infoB = Button(add_pin_colorsF, bootstyle='info', text='     ', command=lambda: add_pin_colorVAR.set('info'))
-    add_pin_infoB.grid(row=0, column=6, padx=5, pady=10, sticky='nsew')
-    add_pin_primaryB = Button(add_pin_colorsF, bootstyle='primary', text='     ', command=lambda: add_pin_colorVAR.set('primary'))
-    add_pin_primaryB.grid(row=0, column=7, padx=5, pady=10, sticky='nsew')
-
-    add_pin_goL = Button(add_pinF, text='Go', bootstyle='primary', command=lambda: add_pin_go(add_pin_titleE.get(), add_pin_actualE.get(), add_pin_colorVAR.get()))
-    add_pin_goL.pack(padx=20, pady=5, fill=X)
-
-    add_pin_closeL = Button(add_pinF, text='X Close', bootstyle='primary outline', command=lambda: add_pinF.destroy())
-    add_pin_closeL.pack(padx=20, pady=5, fill=X)
-def add_pin_go(title, actual, color):
+def add_pin_go(title):
     global add_pinF
     conn_user000 = sqlite3.connect('user000.db')
     c_user000 = conn_user000.cursor()
-    content_json = json.dumps({'text': actual, 'runs': []})
+    content_json = json.dumps({'text': '', 'runs': []})
     c_user000.execute(
         "INSERT INTO corkboard (title, actual, color, content_json) VALUES (?,?,?,?)",
-        (title, actual, color, content_json)
+        (title, '', 'secondary', content_json)
     )
     conn_user000.commit()
+    new_rowid = c_user000.lastrowid
     add_pinF.destroy()
     corkboard_design()
+
+    def save(rid, t, cj, ip, col):
+        sql_process.update_pin_content(rid, t, cj, ip)
+        sql_process.update_pin_color(rid, col)
+        corkboard_design()
+
+    def delete(rid, ip):
+        delete_image_file(ip)
+        sql_process.delete_pin(rid)
+        corkboard_design()
+
+    open_pin_editor(root, new_rowid, title, content_json, None, 'secondary',
+                     on_save=save, on_delete=delete)
 global searchingdot
 searchingdot = 'no'
 def searchthroughlistopen():

@@ -24,12 +24,14 @@ def create_table():
 def create_table2():
     print('Creating table "corkboard"')
     c_user000.execute('''CREATE TABLE corkboard (
-        title text,
-        actual text,
-        color text,
-        position_x real,
-        position_y real
-        )''')
+    title text,
+    actual text,
+    color text,
+    position_x real,
+    position_y real,
+    content_json text,
+    image_path text
+    )''')
     print('Command executed successfully!')
     conn_user000.commit()
 
@@ -59,12 +61,51 @@ def migrate_corkboard_content():
         c_user000.execute("ALTER TABLE corkboard ADD COLUMN image_path TEXT")
     conn_user000.commit()
 
+def migrate_corkboard_schema():
+    """Adds all corkboard columns introduced since the original 3-column
+    version, if missing. Safe to call every startup -- no-ops once present."""
+    c_user000.execute("PRAGMA table_info(corkboard)")
+    existing_cols = [col[1] for col in c_user000.fetchall()]
+    needed = {
+        'position_x': 'REAL',
+        'position_y': 'REAL',
+        'content_json': 'TEXT',
+        'image_path': 'TEXT',
+    }
+    for col, coltype in needed.items():
+        if col not in existing_cols:
+            c_user000.execute(f"ALTER TABLE corkboard ADD COLUMN {col} {coltype}")
+    conn_user000.commit()
+
+def update_pin_position(rowid, x, y):
+    c_user000.execute(
+        "UPDATE corkboard SET position_x=?, position_y=? WHERE rowid=?",
+        (x, y, rowid)
+    )
+    conn_user000.commit()
+
 def update_pin_content(rowid, title, content_json, image_path):
     c_user000.execute(
         "UPDATE corkboard SET title=?, content_json=?, image_path=? WHERE rowid=?",
         (title, content_json, image_path, rowid)
     )
     conn_user000.commit()
+
+def update_pin_color(rowid, color):
+    c_user000.execute(
+        "UPDATE corkboard SET color=? WHERE rowid=?",
+        (color, rowid)
+    )
+    conn_user000.commit()
+
+def delete_pin(rowid):
+    c_user000.execute("DELETE FROM corkboard WHERE rowid=?", (rowid,))
+    conn_user000.commit()
+
+def get_all_image_paths():
+    c_user000.execute("SELECT image_path FROM corkboard WHERE image_path IS NOT NULL")
+    return [row[0] for row in c_user000.fetchall()]
+
 
 
 def add_list(displayname):
