@@ -1522,7 +1522,7 @@ class display_task:
 
         self.taskT.config(state='disabled')
         if self.status == 'unchecked':
-            root.title(f'To-Do 4.2 - A new and innovative tasks organizer.')
+            root.title(f'To-Do 4.3 Beta - A new and innovative tasks organizer. - Corkboard Update 2.2.0')
         if self.status == 'checked' and self.star == 'n':
             self.checktaskB.config(image=checkedtask)
             self.taskT.config(font=('Calibri', 30, 'overstrike'), bootstyle='success', foreground='#00bc8c')
@@ -2747,7 +2747,7 @@ searchbargoB.grid(row=0, column=5, sticky='e')
 side_barF = ScrolledFrame(bootstyle='Default round', width=157, autohide=True)
 side_barF.pack(fill=Y, side=LEFT)
 
-tasksleftL = Label(side_barF, text='To Do 4.2', font=('Calibri', 12), bootstyle='warning')
+tasksleftL = Label(side_barF, text='To Do 4.3 Beta', font=('Calibri', 12), bootstyle='warning')
 tasksleftL.grid(row=0, column=0, columnspan=2, pady=1, sticky='nsew', padx=1)
 
 Separator(side_barF).grid(row=1, pady=5, sticky='nsew', columnspan=2)

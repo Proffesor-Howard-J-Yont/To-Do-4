@@ -299,22 +299,22 @@ def build_pin_preview(parent, root, board, rowid, title, color, content_json_str
 
     card = Frame(parent, bootstyle=color, padding=8)
 
-    Label(card, text=title, bootstyle=f'{color} inverse', font=('Calibri', 14, 'bold'),
+    # combine title + image badge into a single label to avoid extra vertical space
+
+    Label(card, text=f"{title} {'[Image]' if has_image else ''}", bootstyle=f'{color} inverse', font=('Calibri', 14, 'bold'),
           wraplength=pin_width - 16).pack(anchor='w', fill='x')
 
     preview_data, was_truncated = _truncate_content_for_preview(data)
 
-    body = tk.Text(card, height=4, width=1, wrap='word', borderwidth=0,
+    body = tk.Text(card, width=1, wrap='word', borderwidth=0,
                     highlightthickness=0, background=bg, foreground=fg,
                     insertbackground=fg, cursor='arrow')
-    body.pack(fill='x', pady=(4, 0))
+    body.pack(fill='both', pady=(4, 0))
     apply_json_to_text_widget(body, preview_data, make_link_click_handler(root),
                                board=board, rowid=rowid, fg=fg)
     _make_readonly(body)
 
-    if has_image:
-        Label(card, text='\U0001F5BC [Image]', bootstyle=f'{color} inverse',
-              font=('Calibri', 11, 'italic')).pack(anchor='w', pady=(2, 0))
+    
 
     return card
 
