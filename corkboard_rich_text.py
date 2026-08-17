@@ -339,6 +339,7 @@ def open_pin_view(root, rowid, title, content_json_str, image_path, on_edit):
            command=lambda: (win.destroy(), on_edit(rowid))).pack(side='left', padx=5)
     Button(btn_frame, text='Close', bootstyle='secondary outline',
            command=win.destroy).pack(side='right', padx=5)
+    Button(btn_frame, text='Move to tasks', bootstyle='danger outline', command=lambda: move_to_tasks()).pack(side='left', padx=5)
 
     Label(win, text=title, font=('Calibri', 20, 'bold')).pack(anchor='w', padx=15, pady=(15, 5))
 
@@ -364,7 +365,8 @@ def open_pin_view(root, rowid, title, content_json_str, image_path, on_edit):
 
     return win
 
-
+def move_to_tasks():
+    print('Sup bro!! This feature is not quite ready yet.')
 # ---------------------------------------------------------------------------
 # Full editor (Toplevel) -- formatting, image, color, delete
 # ---------------------------------------------------------------------------
