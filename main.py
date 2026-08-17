@@ -2829,7 +2829,7 @@ root.bind('<Home>', home_design)
 #announcer('COMING SOON!', "It's a mystery! Detective YOU is on the case!", "Coming soon to To-do 4!", "We'll give you a hint. The initials for this exciting new feature are D.A.D.\n\nStay tuned to find out more about this revolutionary new feature!")
 #announcer("IT'S A... IT'S A...!", "It's Drag and Drop!!!", "Coming NOW to To-do 4!", "Try dragging a task into another list!! It will move that task and all it's substeps!!")
 #announcer('REVOLUTIONARY!!', "Imagine being able to locate settings and help faster than ever!", "Introducing Assistant.", "Simply press Alt + z to activate the assistant! It's so easy I could cry! Just kidding. It's so easy I could burst with joy! Fooled you! I can't burst with joy. But I could be overjoyed!! And I am!!")
-
+announcer('CORKBOARD 2.0 has arrived!', "Corkboard has been completely redesigned!", "Corkboard 2.0 is here!", "Corkboard has been completely redesigned. Pins are now easier to read, and the corkboard is more organized than ever! Get ready for draggable pins, pictures, font customization, and more! Check it out now!")
 refresh(return_='False')
 home_design()
 if sql_process.check_setting('socork') == 'y' and sql_process.check_setting('crk') == 'y':
