@@ -2,9 +2,9 @@ import tkinter as tk
 from PIL import Image
 Image.CUBIC = Image.BICUBIC
 from ttkbootstrap import *
-from ttkbootstrap.scrolled import ScrolledFrame
+from ttkbootstrap.widgets import ScrolledFrame
 from ttkbootstrap.dialogs import Querybox
-from ttkbootstrap.tooltip import ToolTip
+from ttkbootstrap.widgets import ToolTip
 import sqlite3
 from tkinter import filedialog
 import time
