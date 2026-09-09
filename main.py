@@ -1,6 +1,6 @@
 import tkinter as tk
 from PIL import Image
-Image.CUBIC = Image.BICUBIC
+#Image.CUBIC = Image.BICUBIC
 from ttkbootstrap import *
 from ttkbootstrap.widgets import ScrolledFrame
 from ttkbootstrap.dialogs import Querybox
@@ -16,7 +16,10 @@ import random as rd
 from corkboard_freeform import FreeformCorkboard, PIN_WIDTH, PIN_HEIGHT
 import json
 from corkboard_rich_text import build_pin_preview, open_pin_view, open_pin_editor, delete_image_file
+from myday_weekview import WeekView
 sql_process.migrate_corkboard_content()
+sql_process.migrate_task_schedule_columns()
+sql_process.ensure_setting('sl_myday', 'y')
 
 #  COLORS
 # Default, primary, success, info, warning, danger, light, dark
@@ -147,12 +150,12 @@ def meter_switch_to():
     switchtolist.set(currentlistname)
     for meter_switch in all_lists:
         switchlistbutton = Button(switch_listsscrl, text=meter_switch[0], bootstyle='info link', command=lambda meter_switch=meter_switch: (switchtolist.set(meter_switch[1]), meter_switchlist(meter_switch[0])))
-        switchlistbutton.pack(pady=1, fill=X, padx=5)
+        switchlistbutton.pack(pady=1, fill='x', padx=5)
 
     meter_switchokbuttonB = Button(switchlistTK, text='Ok!', command=lambda: (switchlistTK.destroy(), meterokchangeit()))
-    meter_switchokbuttonB.pack(fill=X, padx=10, pady=5)
+    meter_switchokbuttonB.pack(fill='x', padx=10, pady=5)
     meter_deleteswitchlistB = Button(switchlistTK, text='X', command=lambda: switchlistTK.destroy())
-    meter_deleteswitchlistB.pack(fill=X, padx=10, pady=5)
+    meter_deleteswitchlistB.pack(fill='x', padx=10, pady=5)
 def meterokchangeit():
     global currentlistname
     currentlistname = switchtolist.get()
@@ -181,9 +184,9 @@ def clear_board():
     global backFrame, tasks_frame
     backFrame.destroy()
     backFrame = Frame(root, bootstyle='dark')
-    backFrame.pack(fill=BOTH, expand=True)
+    backFrame.pack(fill='both', expand=True)
 
-    tasks_frame = ScrolledFrame(backFrame, bootstyle='default, round')
+    tasks_frame = ScrolledFrame(backFrame, bootstyle='default-round')
 
 def get_tasks(typeofget, listnameget):
     global searchlist_titleE, searchingdot, comptasks, undone_tasks, items, item, hidedonetasksB, currentlistname, firsttime2, tasks_frame, lstnm_hidecomptasksB, lstnm_swilE
@@ -312,7 +315,7 @@ def taskefocusin(e):
     global taskE
     if taskE.get() == '+ Add Task':
         taskE.config(justify='left', bootstyle='danger')
-        taskE.delete(0, END)
+        taskE.delete(0, 'end')
     else:
         pass
 def taskefocusout(e):
@@ -331,8 +334,8 @@ def tasks_design():
     tasksleftL.config(text='               List')
     # ----------- Task Details Bar -----------
     global TDB_F, TDBnoshow, taskE, lstnmNameL, lstnmeditB, lstnmdeleteB, tasks_frame, currentlistname, lstnm_hidecomptasksB, lstnm_swilE
-    TDB_F = ScrolledFrame(backFrame, bootstyle='Default, round', width=200, autohide=True)
-    TDB_F.pack(fill=Y, side=RIGHT)
+    TDB_F = ScrolledFrame(backFrame, bootstyle='default-round', width=200, autohide=False)
+    TDB_F.pack(fill='y', side='right')
 
     TDBnoshow = Label(TDB_F, bootstyle='secondary', text="Click on a task to\nsee it's details.", font=('Calibri', 17, 'bold'), foreground='white')
     TDBnoshow.grid()
@@ -340,22 +343,22 @@ def tasks_design():
     # ----------- List Name Bar -----------
     global list_nameF, currentlistname
     list_nameF = Frame(backFrame, bootstyle='default')
-    list_nameF.pack(fill=X)
+    list_nameF.pack(fill='x')
     try:
         if currentlistname == 'hi':
             print('zimpa')
     except:
         currentlistname = 'customers'
     lstnmNameL = Label(list_nameF, text=sql_process.get_current_list_display(currentlistname)[0], bootstyle='default', font=('Calibri', 30, 'bold'))
-    lstnmNameL.pack(side=LEFT, padx=15)
+    lstnmNameL.pack(side='left', padx=15)
 
 
     global swilF, lstnm_hidecomptasksB, lstnmeditB, lstnmdeleteB, rando_sep, lstnmmoreinfoB
     rando_sep = Separator(list_nameF, orient='vertical', bootstyle='secondary')
-    rando_sep.pack(side=LEFT)
+    rando_sep.pack(side='left')
         #swil = search within list
     swilF = Frame(list_nameF, bootstyle='default')
-    swilF.pack(side=LEFT, padx=15)
+    swilF.pack(side='left', padx=15)
     lstnm_swilE = Entry(swilF, bootstyle='secondary', font=('Calibri light', 10))
     lstnm_swilE.grid(row=0, column=0, padx=5)
 
@@ -366,10 +369,10 @@ def tasks_design():
     lstnm_hidecomptasksB.grid(row=0, column=2, padx=20)
 
     lstnmeditB = Button(list_nameF, image=renametaskimg, command=lambda: renamelist(), bootstyle='secondary outline')
-    lstnmeditB.pack(side=RIGHT, padx=5)
+    lstnmeditB.pack(side='right', padx=5)
 
     lstnmdeleteB = Button(list_nameF, image=deletetask, command=lambda: droplist(), bootstyle='secondary outline')
-    lstnmdeleteB.pack(side=RIGHT, padx=5)
+    lstnmdeleteB.pack(side='right', padx=5)
 
     lstnmmoreinfoB = Button(list_nameF, image=moreinfoimg, bootstyle='secondary outline', command=lambda: open_more_tasksmenu())
 
@@ -381,12 +384,12 @@ def tasks_design():
         lstnmeditB.pack_forget()
         lstnmdeleteB.pack_forget()
 
-        lstnmmoreinfoB.pack(side=RIGHT, padx=5)
+        lstnmmoreinfoB.pack(side='right', padx=5)
         taskstopbarsize = 'showless'
 
     if currentlistname == 'customers':
-        lstnmeditB.config(state=DISABLED)
-        lstnmdeleteB.config(state=DISABLED)
+        lstnmeditB.config(state='disabled')
+        lstnmdeleteB.config(state='disabled')
 
     if smart_on != 'off':
         lstnm_hidecomptasksB.destroy()
@@ -405,14 +408,14 @@ def tasks_design():
         lstnmNameL.config(text='Due Today')
 
     # ----------- Frame for tasks -----------
-    tasks_frame.pack(fill=BOTH, expand=True)
+    tasks_frame.pack(fill='both', expand=True)
 
     # ----------- Add Task Bar -----------
     newtaskF = Frame(backFrame, bootstyle='default')
-    newtaskF.pack(fill=X, side=BOTTOM)
+    newtaskF.pack(fill='x', side='bottom')
 
     taskE = Entry(newtaskF, font=('Calibri', 20), bootstyle='light', justify='center')
-    taskE.pack(side=RIGHT, fill=X, expand=True)
+    taskE.pack(side='right', fill='x', expand=True)
     taskE.bind('<Return>', add_task)
     taskE.bind('<FocusIn>', taskefocusin)
     taskE.bind('<FocusOut>', taskefocusout)
@@ -535,7 +538,7 @@ def quick_add_task(text, listname):
         return
     conn = sqlite3.connect('info.db')
     c = conn.cursor()
-    c.execute("INSERT INTO '{}' VALUES (:words, :checked, :starred, :difficulty, :duedateday, :duedatetime, :duedateonoff, :amiaministep, :whichminiami, :importance, :notes)".format(listname),
+    c.execute("INSERT INTO '{}' (task, checked, starred, difficulty, duedateday, duedatetime, duedateonoff, amiaministep, whichminiami, importance, notes) VALUES (:words, :checked, :starred, :difficulty, :duedateday, :duedatetime, :duedateonoff, :amiaministep, :whichminiami, :importance, :notes)".format(listname),
               {'words': text, 'checked': 'unchecked', 'starred': 'n', 'difficulty': sql_process.check_setting('def_difficulty'),
                'duedateday': time.strftime("%x"), 'duedatetime': '1200', 'duedateonoff': sql_process.check_setting('def_duedateonoff'),
                'amiaministep': 'no', 'whichminiami': 'notamini', 'importance': '1', 'notes': sql_process.check_setting('def_note')})
@@ -557,7 +560,7 @@ def home_design(e=None):
         home_header.pack()
 
     home_middleF = VStretchScrollFrame(backFrame, bootstyle='dark')
-    home_middleF.pack(fill=BOTH, expand=True)
+    home_middleF.pack(fill='both', expand=True)
 
     # -------- Widget #1: Meter Widget -------
     meterwidgetF = Frame(home_middleF.inner, bootstyle='default')
@@ -584,7 +587,7 @@ def home_design(e=None):
         mw_notasksinlistErrorNotification.pack(pady=15, padx=30)
 
     toolbar_meterF = Frame(meterwidgetF, bootstyle='default')
-    toolbar_meterF.pack(fill=X, pady=10)
+    toolbar_meterF.pack(fill='x', pady=10)
 
     mw_listdisplaying = Label(toolbar_meterF, text=sql_process.get_current_list_display(currentlistname)[0], bootstyle='info', font=('Calibri', 15, 'bold'))
     mw_listdisplaying.grid(row=0, column=0, pady=15, padx=30)
@@ -644,9 +647,9 @@ def home_design(e=None):
         listbtn = Button(alltaskseql_listsF, text=f'{sql_process.get_current_list_display(individ_list[1])[0]} - {taskinlist}',
                   bootstyle='link',
                   command=lambda ln=individ_list[1]: (globals().__setitem__('currentlistname', ln), home_design()))
-        listbtn.pack(padx=2, pady=2, fill=X)
+        listbtn.pack(padx=2, pady=2, fill='x')
 
-    Separator(alltaskseqlF, bootstyle='secondary').pack(fill=X, padx=10, pady=0)
+    Separator(alltaskseqlF, bootstyle='secondary').pack(fill='x', padx=10, pady=0)
 
     alltaskseqltotalL = Label(alltaskseqlF, text=f'Total: {tasksinlists} tasks to go!', font=('Calibri', 15))
     alltaskseqltotalL.pack(pady=10, padx=20)
@@ -658,18 +661,18 @@ def home_design(e=None):
     displistF.grid(row=1, column=0, pady=0, padx=30, sticky='nsew')
 
     displist_headerF = Frame(displistF, bootstyle='default')
-    displist_headerF.pack(fill=X, expand=True)
+    displist_headerF.pack(fill='x', expand=True)
 
     disp_list_Listname = Label(displist_headerF, text=sql_process.get_current_list_display(currentlistname)[0], font=('Calibri', 15, 'bold'))
-    disp_list_Listname.pack(side=LEFT, padx=10, pady=10)
+    disp_list_Listname.pack(side='left', padx=10, pady=10)
 
     disp_list_changename = Button(displist_headerF, text='Change...', bootstyle='info outline', command=lambda: meter_switch_to())
-    disp_list_changename.pack(side=RIGHT, padx=10, pady=10)
+    disp_list_changename.pack(side='right', padx=10, pady=10)
 
-    Separator(displistF, bootstyle='secondary').pack(fill=X, padx=10, pady=5)
+    Separator(displistF, bootstyle='secondary').pack(fill='x', padx=10, pady=5)
 
     displist_tasksF = ScrolledFrame(displistF, bootstyle='default round')
-    displist_tasksF.pack(fill=BOTH, expand=True)
+    displist_tasksF.pack(fill='both', expand=True)
 
     homeitems = []
     conn = sqlite3.connect('info.db')
@@ -821,14 +824,14 @@ def settings():
     clear_board()
     current_design = 'settings'
 
-    tasks_frame.pack(fill=BOTH, expand=True)
+    tasks_frame.pack(fill='both', expand=True)
 
     settingsheaderL = Label(tasks_frame, text='Settings', font=('Calibri', 40, 'bold'), bootstyle='danger')
-    settingsheaderL.pack(fill=X, expand=True)
+    settingsheaderL.pack(fill='x', expand=True)
 
     # ---------- DELETING METHODS ----------
     deleteing_lblfrme = Labelframe(tasks_frame, text='Deleting Methods')
-    deleteing_lblfrme.pack(fill=X, padx=10, pady=10)
+    deleteing_lblfrme.pack(fill='x', padx=10, pady=10)
     # ----- ABD: Ask before delete tasks -----
     abdB = Button(deleteing_lblfrme, image=toggle_offimg, bootstyle='success link', command=lambda: (sql_process.setting_configure('abd', 'y'), settings()))
     abdB.grid(row=0, column=0)
@@ -897,7 +900,7 @@ def settings():
 
     # ---------- CORKBOARD ----------
     cork_lblfrme = Labelframe(tasks_frame, text='Corkboard')
-    cork_lblfrme.pack(fill=X, padx=10, pady=10)
+    cork_lblfrme.pack(fill='x', padx=10, pady=10)
 
     # ----- CORK: Corkboard -----
     corkB = Button(cork_lblfrme, image=toggle_onimg, bootstyle='success link', command=lambda: (sql_process.setting_configure('crk', 'n'), settings(), lock_crk()))
@@ -921,9 +924,23 @@ def settings():
     start_corkL = Label(cork_lblfrme, text='Open Corkboard on startup (Corkboard must be on)', font=('Calibri', 16))
     start_corkL.grid(row=1, column=1, columnspan=2)
 
+    # ---------- MY DAY ----------
+    myday_lblfrme = Labelframe(tasks_frame, text='My Day')
+    myday_lblfrme.pack(fill='x', padx=10, pady=10)
+
+    # ----- SL_MYDAY: Show My Day in sidebar -----
+    myday_settingB = Button(myday_lblfrme, image=toggle_onimg, bootstyle='success link', command=lambda: (sql_process.setting_configure('sl_myday', 'n'), settings(), lock_sl_myday()))
+    myday_settingB.grid(row=0, column=0)
+
+    if sql_process.check_setting('sl_myday') == 'n':
+        myday_settingB.config(image=toggle_offimg, command=lambda: (sql_process.setting_configure('sl_myday', 'y'), settings(), unlock_sl_myday()))
+
+    myday_settingL = Label(myday_lblfrme, text='Show My Day in sidebar', font=('Calibri', 16))
+    myday_settingL.grid(row=0, column=1)
+
     # ---------- OTHER ----------
     other_lblfrme = Labelframe(tasks_frame, text='Other')
-    other_lblfrme.pack(fill=X, padx=10, pady=10)
+    other_lblfrme.pack(fill='x', padx=10, pady=10)
 
     # ----- HHT: Home header text -----
     hhtB = Button(other_lblfrme, image=toggle_onimg, bootstyle='success link', command=lambda: (sql_process.setting_configure('hhto', 'n'), settings()))
@@ -1016,7 +1033,7 @@ def settings():
 
     # ---------- SMART LISTS ----------
     smartlist_lblfrme = Labelframe(tasks_frame, text='Smart Lists')
-    smartlist_lblfrme.pack(fill=X, padx=10, pady=10)
+    smartlist_lblfrme.pack(fill='x', padx=10, pady=10)
 
     # ----- sl_str: Starred -----
     sl_strB = Button(smartlist_lblfrme, image=toggle_onimg, bootstyle='success link', command=lambda: (sql_process.setting_configure('sl_str', 'n'), lock_sl_str(), settings()))
@@ -1061,7 +1078,7 @@ def settings():
 
     # ---------- ADD TASK DEFAULTS ----------
     addtaskdefaults_lblfrme = Labelframe(tasks_frame, text='Add Task Defaults')
-    addtaskdefaults_lblfrme.pack(fill=X, padx=10, pady=10)
+    addtaskdefaults_lblfrme.pack(fill='x', padx=10, pady=10)
 
     addtaskdefaultssubheader = Label(addtaskdefaults_lblfrme, text="When adding a task, set a default for a specific thing. Example: If you set the default for difficulty to be 'Hard', then when you add a task the difficulty will be 'Hard'.", wraplength=500)
     addtaskdefaultssubheader.grid(row=0, column=0, columnspan=3)
@@ -1099,7 +1116,7 @@ def settings():
 
     # ---------- PASSWORD ----------
     psswrd_lblfrme = Labelframe(tasks_frame, text='Password')
-    psswrd_lblfrme.pack(fill=X, padx=10, pady=10)
+    psswrd_lblfrme.pack(fill='x', padx=10, pady=10)
 
     # ----- pin: Pin -----
     # ----- pino: Pin On -----
@@ -1138,9 +1155,9 @@ class CardsContainer(Frame):
     def add_card(self, title, text, color='secondary'):
         card = Frame(self, bootstyle=color, padding=10)
         Label(card, text=title, bootstyle=f'{color} inverse', font=('Calibri', 16, 'bold'),
-              wraplength=CARD_MIN_WIDTH - 20).pack(anchor="w", fill=X)
+              wraplength=CARD_MIN_WIDTH - 20).pack(anchor="w", fill='x')
         Label(card, text=text, bootstyle=f'{color} inverse', font=('Calibri', 15),
-              wraplength=CARD_MIN_WIDTH - 20).pack(anchor="w", pady=(5, 0), fill=X)
+              wraplength=CARD_MIN_WIDTH - 20).pack(anchor="w", pady=(5, 0), fill='x')
 
         self.cards.append(card)
         self.relayout()
@@ -1224,7 +1241,7 @@ def corkboard_design():
     current_design = 'corkboard'
 
     cork_topF = Frame(backFrame, bootstyle='default')
-    cork_topF.pack(fill=X)
+    cork_topF.pack(fill='x')
 
     corkboardheaderL = Label(cork_topF, text='C o r k b o a r d', font=('Calibri', 40, 'bold'), bootstyle='warning')
     corkboardheaderL.pack()
@@ -1233,12 +1250,12 @@ def corkboard_design():
     corkboardsubheaderL.pack()
 
     cork_toolbarF = Frame(cork_topF, bootstyle='dark')
-    cork_toolbarF.pack(fill=X, padx=20, pady=20)
+    cork_toolbarF.pack(fill='x', padx=20, pady=20)
 
     corkboardaddpinL = Button(cork_toolbarF, text='+ Add Pin', bootstyle='light outline', command=lambda: add_pin())
     corkboardaddpinL.grid(row=0, column=0, padx=10, pady=10)
 
-    Separator(cork_topF, bootstyle='warning').pack(fill=X)
+    Separator(cork_topF, bootstyle='warning').pack(fill='x')
 
     cork_pinsF = FreeformCorkboard(backFrame, on_position_change=sql_process.update_pin_position)
     cork_pinsF.pack(fill="both", expand=True, padx=8, pady=8)
@@ -1265,9 +1282,9 @@ def add_pin():
         add_pin_go(title_E.get().strip() or 'Untitled')
 
     title_E.bind('<Return>', confirm)
-    Button(add_pinF, text='Create', bootstyle='primary', command=confirm).pack(fill=X, padx=20, pady=5)
+    Button(add_pinF, text='Create', bootstyle='primary', command=confirm).pack(fill='x', padx=20, pady=5)
     Button(add_pinF, text='X Close', bootstyle='primary outline',
-           command=lambda: add_pinF.destroy()).pack(fill=X, padx=20, pady=5)
+           command=lambda: add_pinF.destroy()).pack(fill='x', padx=20, pady=5)
 
 def add_pin_go(title):
     global add_pinF
@@ -1303,13 +1320,13 @@ def searchthroughlistopen():
     searchlistF.place(in_=root, anchor='c', relx=.5, rely=.5)
 
     searchlist_titleE = Entry(searchlistF, font=('Calibri', 15), width=15)
-    searchlist_titleE.pack(padx=15, pady=15, fill=X)
+    searchlist_titleE.pack(padx=15, pady=15, fill='x')
 
     searchlist_goL = Button(searchlistF, text='Go', bootstyle='primary', command=lambda: (get_tasks('search', currentlistname), searchthroughlistclose()))
-    searchlist_goL.pack(padx=15, pady=0, fill=X)
+    searchlist_goL.pack(padx=15, pady=0, fill='x')
 
     searchlist_closeL = Button(searchlistF, text='X Close', bootstyle='primary outline', command=lambda: searchthroughlistclose())
-    searchlist_closeL.pack(padx=15, pady=15, fill=X)
+    searchlist_closeL.pack(padx=15, pady=15, fill='x')
     searchingdot = 'yes'
 def searchthroughlistclose():
     global searchingdot, searchlistF
@@ -1328,13 +1345,13 @@ def open_more_tasksmenu():
     listmenuF.after(5000, gonewithlistmenuF)
 
     deletelistB = Button(listmenuF, text='🗑 Delete List                      ', command=lambda: droplist(), bootstyle='info outline')
-    deletelistB.pack(fill=X, pady=4, padx=6)
+    deletelistB.pack(fill='x', pady=4, padx=6)
     renamelistB = Button(listmenuF, text='🖊 Rename List                    ', command=lambda: renamelist(), bootstyle='info outline')
-    renamelistB.pack(fill=X, pady=4, padx=6)
+    renamelistB.pack(fill='x', pady=4, padx=6)
     shcomptasksB = Button(listmenuF, text='🕶 Show/hide comp tasks', command=lambda: get_tasks('showhide', list), bootstyle='info outline')
-    shcomptasksB.pack(fill=X, pady=4, padx=6)
+    shcomptasksB.pack(fill='x', pady=4, padx=6)
     searchlistB = Button(listmenuF, text='🔎 Search                             ', command=lambda: searchthroughlistopen(), bootstyle='info outline')
-    searchlistB.pack(fill=X, pady=4, padx=6)
+    searchlistB.pack(fill='x', pady=4, padx=6)
 
     if currentlistname == 'customers':
         deletelistB.config(state='disabled')
@@ -1359,12 +1376,12 @@ def announcer_more(header, subheader, tellmemoreheader, tellmemorewords):
     announce_more_blahblahL.pack(pady=15)
 
     announce_closebuttonB = Button(announceTK, text='Close window', bootstyle='light outline', command=lambda: announceTK.destroy())
-    announce_closebuttonB.pack(fill=X, padx=50, pady=20, side=BOTTOM)
+    announce_closebuttonB.pack(fill='x', padx=50, pady=20, side='bottom')
 def announcer(header, subheader, tellmemoreheader, tellmemorewords):
 
     # ----------- Announcement Banner ------------
     announcementF = Frame(root, bootstyle='dark')
-    announcementF.pack(fill=X, padx=20, pady=20)
+    announcementF.pack(fill='x', padx=20, pady=20)
     annouunceheaderL = Label(announcementF, text=header, font=('Calibri light', 20), bootstyle='danger', background='#303030')
     annouunceheaderL.grid(row=0, column=0, padx=5)
     annouuncesubheaderL = Label(announcementF, text=subheader, font=('Calibri', 15, 'bold'), bootstyle='dark inverse', foreground='white')
@@ -1389,7 +1406,7 @@ class display_lists:
             self.listB.config(text=f"""{list[0][0:13]}...""")#{list[0][1]}{list[0][2]}{list[0][3]}{list[0][4]}{list[0][5]}{list[0][6]}{list[0][7]}{list[0][8]}{list[0][9]}{list[0][10]}{list[0][11]}{list[0][12]}...""")
 
         if list[0] != 'wEIHFWUITEUIRTERUIdfghdughdgeiurhriuhaejbejhgaasfasdfgafsdgadfgjdfghjdfgdajfgh':
-            self.listB.pack(fill=X, pady=2)
+            self.listB.pack(fill='x', pady=2)
             self.listbToolTip = ToolTip(self.listB, text=list[0], bootstyle='dark inverse')
         self.personallistvar = list
         global firsttime, taskE, lstnmNameL, lstnmeditB, lstnmdeleteB
@@ -1404,8 +1421,8 @@ class display_lists:
         lstnmeditB.config(state='normal')
         lstnmdeleteB.config(state='normal')
         if currentlistname == 'customers':
-            lstnmeditB.config(state=DISABLED)
-            lstnmdeleteB.config(state=DISABLED)
+            lstnmeditB.config(state='disabled')
+            lstnmdeleteB.config(state='disabled')
     def switchlists(self):
         global currentlistname, lstnmNameL, lstnmeditB, lstnmdeleteB, firsttime, smart_on
         smart_on = 'off'
@@ -1413,11 +1430,11 @@ class display_lists:
 
         currentlistname = self.personallistvar[1]
         lstnmNameL.config(text=self.personallistvar[0])
-        lstnmeditB.config(state=NORMAL)
-        lstnmdeleteB.config(state=NORMAL)
+        lstnmeditB.config(state='normal')
+        lstnmdeleteB.config(state='normal')
         if currentlistname == 'customers':
-            lstnmeditB.config(state=DISABLED)
-            lstnmdeleteB.config(state=DISABLED)
+            lstnmeditB.config(state='disabled')
+            lstnmdeleteB.config(state='disabled')
 
 class display_task:
     # Plain displaying and editing task
@@ -1437,6 +1454,9 @@ class display_task:
         self.whichminiami = item[9]
         self.importance = item[10]
         self.notes = item[11]
+        self.schedule_date = item[12] if len(item) > 12 else ''
+        self.schedule_start = item[13] if len(item) > 13 else ''
+        self.schedule_duration = item[14] if len(item) > 14 else ''
 
         if self.amiaministep == 'no':
             numotasks += 1
@@ -1458,10 +1478,10 @@ class display_task:
             lstnmNameL.config(text='Due Today')
 
         self.single_taskF = Frame(tasks_frame, bootstyle='dark')
-        self.single_taskF.pack(padx=15, pady=10, fill=BOTH, expand=True)
+        self.single_taskF.pack(padx=15, pady=10, fill='both', expand=True)
 
         self.single_taskF_rowA = Frame(self.single_taskF, bootstyle='dark')
-        self.single_taskF_rowA.pack(padx=10, fill=X, expand=True)
+        self.single_taskF_rowA.pack(padx=10, fill='x', expand=True)
         self.single_taskF_rowA.bind('<Button-1>', self.allfunctions)
 
         self.startaskB = Button(self.single_taskF_rowA, image=unstarredimg, command=lambda: self.startask('no'), bootstyle='danger outline')
@@ -1470,11 +1490,11 @@ class display_task:
         self.checktaskB.pack(side='left', padx=0, pady=5)
 
         self.taskT = Entry(self.single_taskF_rowA, bootstyle='danger', font=('Calibri', 30), foreground='#e74c3c')
-        self.taskT.pack(fill=X, expand=True, padx=5, side='right', pady=5)
+        self.taskT.pack(fill='x', expand=True, padx=5, side='right', pady=5)
         self.taskT.insert(0, self.name)
 
         self.single_taskF_rowB = Frame(self.single_taskF, bootstyle='dark')
-        self.single_taskF_rowB.pack(padx=10, fill=X, expand=True)
+        self.single_taskF_rowB.pack(padx=10, fill='x', expand=True)
         self.single_taskF_rowB.bind('<Button-1>', self.allfunctions)
 
         self.tsdL = Label(self.single_taskF_rowB, text=self.difficulty, bootstyle='danger', background='#303030')
@@ -1571,7 +1591,7 @@ class display_task:
         global firsttime3
         '''if firsttime3 != 0:
             for y in range(0,5):
-                self.single_taskF.pack(padx=10, pady=y, fill=BOTH, expand=True)
+                self.single_taskF.pack(padx=10, pady=y, fill='both', expand=True)
                 root.update()
                 time.sleep(.001)'''
     def checkofftask(self, returnyesno):
@@ -1617,9 +1637,9 @@ class display_task:
             delheaderL = Label(deletetaskF, text=f'Delete task: {self.name}?', font=('Calibri', 20, 'bold'), bootstyle='danger')
             delheaderL.pack(pady=10, padx=10)
             delokB = Button(deletetaskF, text='Yes!', command=lambda: okdelete(), bootstyle='danger outline')
-            delokB.pack(fill=X, padx=10, pady=10) # Delete ok button
+            delokB.pack(fill='x', padx=10, pady=10) # Delete ok button
             closedeltaskB = Button(deletetaskF, text='X', command=lambda: deletetaskF.destroy(), bootstyle='danger outline')
-            closedeltaskB.pack(fill=X, padx=10, pady=5)
+            closedeltaskB.pack(fill='x', padx=10, pady=5)
     def renametask(self, returnyesno):
         def okrename(e=None):
             global currentlistname
@@ -1701,7 +1721,7 @@ class display_task:
         global currentlistname
         conn = sqlite3.connect('info.db')
         c = conn.cursor()
-        c.execute("INSERT INTO '{}' VALUES (:words, :checked, :starred, :difficulty, :duedateday, :duedatetime, :duedateonoff, :amiaministep, :whichminiami, :importance, :notes)".format(self.switchtolist.get()), {'words':self.name, 'checked':self.status, 'starred':self.star, 'difficulty':self.difficulty, 'duedateday':self.duedateday, 'duedatetime':self.duedatetime, 'duedateonoff':self.duedateonoff, 'amiaministep':self.amiaministep, 'whichminiami':self.whichminiami, 'importance':self.importance, 'notes':self.notes})
+        c.execute("INSERT INTO '{}' (task, checked, starred, difficulty, duedateday, duedatetime, duedateonoff, amiaministep, whichminiami, importance, notes, schedule_date, schedule_start, schedule_duration) VALUES (:words, :checked, :starred, :difficulty, :duedateday, :duedatetime, :duedateonoff, :amiaministep, :whichminiami, :importance, :notes, :schedule_date, :schedule_start, :schedule_duration)".format(self.switchtolist.get()), {'words':self.name, 'checked':self.status, 'starred':self.star, 'difficulty':self.difficulty, 'duedateday':self.duedateday, 'duedatetime':self.duedatetime, 'duedateonoff':self.duedateonoff, 'amiaministep':self.amiaministep, 'whichminiami':self.whichminiami, 'importance':self.importance, 'notes':self.notes, 'schedule_date':self.schedule_date, 'schedule_start':self.schedule_start, 'schedule_duration':self.schedule_duration})
 
         c.execute("DELETE from '{}' WHERE rowid='{}'".format(currentlistname, self.number))
         conn.commit()
@@ -1710,7 +1730,7 @@ class display_task:
         oidgrabber = c.fetchone()[0]
 
         for step in sql_process.get_ministeps(self.number, currentlistname):
-            c.execute("INSERT INTO '{}' VALUES (:words, :checked, :starred, :difficulty, :duedateday, :duedatetime, :duedateonoff, :amiaministep, :whichminiami, :importance, :notes)".format(self.switchtolist.get()), {'words':step[1], 'checked':step[2], 'starred':step[3], 'difficulty':step[4], 'duedateday':step[5], 'duedatetime':step[6], 'duedateonoff':step[7], 'amiaministep':step[8], 'whichminiami':oidgrabber, 'importance':step[10], 'notes':step[11]})
+            c.execute("INSERT INTO '{}' (task, checked, starred, difficulty, duedateday, duedatetime, duedateonoff, amiaministep, whichminiami, importance, notes, schedule_date, schedule_start, schedule_duration) VALUES (:words, :checked, :starred, :difficulty, :duedateday, :duedatetime, :duedateonoff, :amiaministep, :whichminiami, :importance, :notes, :schedule_date, :schedule_start, :schedule_duration)".format(self.switchtolist.get()), {'words':step[1], 'checked':step[2], 'starred':step[3], 'difficulty':step[4], 'duedateday':step[5], 'duedatetime':step[6], 'duedateonoff':step[7], 'amiaministep':step[8], 'whichminiami':oidgrabber, 'importance':step[10], 'notes':step[11], 'schedule_date':step[12] if len(step) > 12 else '', 'schedule_start':step[13] if len(step) > 13 else '', 'schedule_duration':step[14] if len(step) > 14 else ''})
 
         c.execute("DELETE from '{}' WHERE whichminiami='{}'".format(currentlistname, self.number))
         conn.commit()
@@ -1728,9 +1748,9 @@ class display_task:
         self.mif_move_listF.pack(padx=0, pady=20)
         for mvlist in all_lists:
             self.movelistbutton = Button(self.mif_move_listF, text=mvlist[0], command=lambda mvlist=mvlist: (self.switchtolist.set(mvlist[1]), self.okmoveit()))
-            self.movelistbutton.pack(pady=1, fill=X, padx=5)
+            self.movelistbutton.pack(pady=1, fill='x', padx=5)
         self.mif_move_closeB = Button(self.miF_move, text='Close', command=lambda: self.miF_move.destroy(), bootstyle='primary outline')
-        self.mif_move_closeB.pack(pady=1, fill=X, padx=5)
+        self.mif_move_closeB.pack(pady=1, fill='x', padx=5)
 
     # Copy to's
     def copy_to(self):
@@ -1744,23 +1764,23 @@ class display_task:
         self.switchtolistcopy.set(currentlistname)
         for cplist in all_lists:
             self.copylistbutton = Button(self.copytaskF, text=cplist[0], command=lambda cplist=cplist: (self.switchtolistcopy.set(cplist[1]), self.okcopyit()))
-            self.copylistbutton.pack(pady=1, fill=X, padx=5)
+            self.copylistbutton.pack(pady=1, fill='x', padx=5)
 
         self.cptskclosebuttonB = Button(self.copytaskF, text='Close', bootstyle='primary outline', command=lambda: self.copytaskF.destroy())
-        self.cptskclosebuttonB.pack(fill=X, padx=10, pady=5)
+        self.cptskclosebuttonB.pack(fill='x', padx=10, pady=5)
     def okcopyit(self):
         global switchtolist
         conn = sqlite3.connect('info.db')
         c = conn.cursor()
         c.execute("SELECT * from '{}' WHERE rowid='{}'".format(currentlistname, self.number))
         copygrabber = c.fetchone()
-        c.execute("INSERT INTO '{}' VALUES (:words, :checked, :starred, :difficulty, :duedateday, :duedatetime, :duedateonoff, :amiaministep, :whichminiami, :importance, :notes)".format(self.switchtolistcopy.get()), {'words':self.name, 'checked':self.status, 'starred':self.star, 'difficulty':self.difficulty, 'duedateday':self.duedateday, 'duedatetime':self.duedatetime, 'duedateonoff':self.duedateonoff, 'amiaministep':self.amiaministep, 'whichminiami':self.whichminiami, 'importance':self.importance, 'notes':self.notes})
+        c.execute("INSERT INTO '{}' (task, checked, starred, difficulty, duedateday, duedatetime, duedateonoff, amiaministep, whichminiami, importance, notes, schedule_date, schedule_start, schedule_duration) VALUES (:words, :checked, :starred, :difficulty, :duedateday, :duedatetime, :duedateonoff, :amiaministep, :whichminiami, :importance, :notes, :schedule_date, :schedule_start, :schedule_duration)".format(self.switchtolistcopy.get()), {'words':self.name, 'checked':self.status, 'starred':self.star, 'difficulty':self.difficulty, 'duedateday':self.duedateday, 'duedatetime':self.duedatetime, 'duedateonoff':self.duedateonoff, 'amiaministep':self.amiaministep, 'whichminiami':self.whichminiami, 'importance':self.importance, 'notes':self.notes, 'schedule_date':self.schedule_date, 'schedule_start':self.schedule_start, 'schedule_duration':self.schedule_duration})
 
         c.execute('''SELECT rowid FROM '{}' WHERE task='{}' AND checked='{}' AND difficulty='{}' AND notes='{}' '''.format(self.switchtolistcopy.get(), self.name, self.status, self.difficulty, self.notes))
         oidgrabber = c.fetchone()[0]
 
         for step in sql_process.get_ministeps(self.number, currentlistname):
-            c.execute("INSERT INTO '{}' VALUES (:words, :checked, :starred, :difficulty, :duedateday, :duedatetime, :duedateonoff, :amiaministep, :whichminiami, :importance, :notes)".format(self.switchtolistcopy.get()), {'words':step[1], 'checked':step[2], 'starred':step[3], 'difficulty':step[4], 'duedateday':step[5], 'duedatetime':step[6], 'duedateonoff':step[7], 'amiaministep':step[8], 'whichminiami':oidgrabber, 'importance':step[10], 'notes':step[11]})
+            c.execute("INSERT INTO '{}' (task, checked, starred, difficulty, duedateday, duedatetime, duedateonoff, amiaministep, whichminiami, importance, notes, schedule_date, schedule_start, schedule_duration) VALUES (:words, :checked, :starred, :difficulty, :duedateday, :duedatetime, :duedateonoff, :amiaministep, :whichminiami, :importance, :notes, :schedule_date, :schedule_start, :schedule_duration)".format(self.switchtolistcopy.get()), {'words':step[1], 'checked':step[2], 'starred':step[3], 'difficulty':step[4], 'duedateday':step[5], 'duedatetime':step[6], 'duedateonoff':step[7], 'amiaministep':step[8], 'whichminiami':oidgrabber, 'importance':step[10], 'notes':step[11], 'schedule_date':step[12] if len(step) > 12 else '', 'schedule_start':step[13] if len(step) > 13 else '', 'schedule_duration':step[14] if len(step) > 14 else ''})
 
 
         conn.commit()
@@ -1786,6 +1806,22 @@ class display_task:
         conn.commit()
         conn.close()
 
+    # Schedule (My Day) -- independent of due date
+    def set_schedule(self, sched_date, sched_start, sched_duration):
+        sched_start = sched_start.strip()
+        sched_duration = sched_duration.strip()
+        if not (sched_start and sched_duration):
+            sched_start, sched_duration = '', ''
+        conn = sqlite3.connect('info.db')
+        c = conn.cursor()
+        c.execute("""UPDATE '{}' SET schedule_date=?, schedule_start=?, schedule_duration=? WHERE rowid=?""".format(currentlistname),
+                  (sched_date.strip(), sched_start, sched_duration, self.number))
+        conn.commit()
+        conn.close()
+        refresh(return_=self.number)
+    def clear_schedule(self):
+        self.set_schedule('', '', '')
+
     # Options for task
     def expand_3_dots(self, e=None):
         def gonewithmif(E=None):
@@ -1797,17 +1833,17 @@ class display_task:
         self.miF = Frame(backFrame, bootstyle='dark')
         self.miF.place(x=self.posx, y=self.posy)
         self.deletetaskB = Button(self.miF, text='🗑 Delete Task          ', command=lambda: self.deletetask(), bootstyle='info outline')
-        self.deletetaskB.pack(fill=X, pady=4, padx=2)
+        self.deletetaskB.pack(fill='x', pady=4, padx=2)
         self.renametaskB = Button(self.miF, text='🖊 Rename Task        ', command=lambda: self.renametask('no'), bootstyle='info outline')
-        self.renametaskB.pack(fill=X, pady=4, padx=2)
+        self.renametaskB.pack(fill='x', pady=4, padx=2)
         self.mifchecktaskB = Button(self.miF, text='✔ Check Task          ', command=lambda: self.checkofftask('no'), bootstyle='info outline')
-        self.mifchecktaskB.pack(fill=X, pady=4, padx=2)
+        self.mifchecktaskB.pack(fill='x', pady=4, padx=2)
         self.mifstartaskB = Button(self.miF, text='⭐ Star Task             ', command=lambda: self.startask('no'), bootstyle='info outline')
-        self.mifstartaskB.pack(fill=X, pady=4, padx=2)
+        self.mifstartaskB.pack(fill='x', pady=4, padx=2)
         self.mifmovetaskB = Button(self.miF, text='[-> Move Task          ', command=lambda: self.open_move(), bootstyle='info outline')
-        self.mifmovetaskB.pack(fill=X, pady=4, padx=2)
+        self.mifmovetaskB.pack(fill='x', pady=4, padx=2)
         self.mifmoreB = Button(self.miF, text='💬 Open Large View  ', command=lambda: self.allfunctions(), bootstyle='info outline')
-        self.mifmoreB.pack(fill=X, pady=4, padx=2)
+        self.mifmoreB.pack(fill='x', pady=4, padx=2)
 
         self.miF.after(5000, gonewithmif)
     def allfunctions(self, e=None):
@@ -1897,7 +1933,7 @@ class display_task:
 
         allfnctns_duedateday_de = DateEntry(allfnctnsF_status, bootstyle='secondary', firstweekday=6)
         allfnctns_duedateday_de.grid(row=8, column=0, pady=5, padx=5, columnspan=2)
-        allfnctns_duedateday_de.entry.delete(0, END)
+        allfnctns_duedateday_de.entry.delete(0, 'end')
         allfnctns_duedateday_de.entry.insert(0, self.duedateday)
 
         allfnctns_duedateday_savebutton = Button(allfnctnsF_status, text='Save', command=lambda: (self.setduedate(allfnctns_duedateday_de.entry.get())), bootstyle='secondary outline')
@@ -1907,37 +1943,59 @@ class display_task:
             allfnctns_duedateday_de.grid_forget()
             allfnctns_duedateday_savebutton.grid_forget()
 
-        Separator(allfnctnsF_status).grid(row=10, column=0, columnspan=2, sticky='nsew')
+        allfnctns_schedule_headerL = Label(allfnctnsF_status, text='Schedule (My Day)', font=('Calibri', 13), bootstyle='primary')
+        allfnctns_schedule_headerL.grid(row=10, column=0, columnspan=2, pady=(10, 0))
+
+        allfnctns_schedule_de = DateEntry(allfnctnsF_status, bootstyle='secondary', firstweekday=6)
+        allfnctns_schedule_de.grid(row=11, column=0, pady=5, padx=5, columnspan=2)
+        allfnctns_schedule_de.entry.delete(0, 'end')
+        allfnctns_schedule_de.entry.insert(0, self.schedule_date)
+
+        allfnctns_schedule_startE = Entry(allfnctnsF_status, font=('Calibri', 13), width=8, justify='center')
+        allfnctns_schedule_startE.grid(row=12, column=0, pady=5, padx=5)
+        allfnctns_schedule_startE.insert(0, self.schedule_start if self.schedule_start else 'HHMM')
+
+        allfnctns_schedule_durationE = Entry(allfnctnsF_status, font=('Calibri', 13), width=8, justify='center')
+        allfnctns_schedule_durationE.grid(row=12, column=1, pady=5, padx=5)
+        allfnctns_schedule_durationE.insert(0, self.schedule_duration if self.schedule_duration else 'mins')
+
+        allfnctns_schedule_savebutton = Button(allfnctnsF_status, text='Save', command=lambda: (self.set_schedule(allfnctns_schedule_de.entry.get(), allfnctns_schedule_startE.get(), allfnctns_schedule_durationE.get())), bootstyle='secondary outline')
+        allfnctns_schedule_savebutton.grid(row=13, column=0, columnspan=2, pady=5, padx=5)
+
+        allfnctns_schedule_clearbutton = Button(allfnctnsF_status, text='Remove from My Day', command=lambda: (self.clear_schedule()), bootstyle='danger outline')
+        allfnctns_schedule_clearbutton.grid(row=14, column=0, columnspan=2, pady=5, padx=5)
+
+        Separator(allfnctnsF_status).grid(row=15, column=0, columnspan=2, sticky='nsew')
 
         allfnctns_notes_button = Button(allfnctnsF_status, image=note_small, bootstyle='secondary outline')
-        allfnctns_notes_button.grid(row=11, column=0, pady=20, padx=5)
+        allfnctns_notes_button.grid(row=16, column=0, pady=20, padx=5)
         allfnctns_notes_entry = Entry(allfnctnsF_status, font=('Calibri', 15), width=11)
-        allfnctns_notes_entry.grid(row=11, column=1, pady=20, padx=5)
+        allfnctns_notes_entry.grid(row=16, column=1, pady=20, padx=5)
         allfnctns_notes_entry.insert(0, self.notes)
         allfnctns_notes_entry.bind('<Return>', self.edit_note)
 
 
-        Separator(allfnctnsF_status).grid(row=12, column=0, columnspan=2, sticky='nsew')
+        Separator(allfnctnsF_status).grid(row=17, column=0, columnspan=2, sticky='nsew')
 
         allfnctns_rename_button = Button(allfnctnsF_status, image=renametasksmall, command=lambda: (self.renametask('yes')), bootstyle='secondary outline')
-        allfnctns_rename_button.grid(row=13, column=0, pady=20, padx=5)
+        allfnctns_rename_button.grid(row=18, column=0, pady=20, padx=5)
         allfnctns_rename_label = Label(allfnctnsF_status, text='Rename Task', font=('Calibri', 15))
-        allfnctns_rename_label.grid(row=13, column=1, pady=20, padx=5)
+        allfnctns_rename_label.grid(row=18, column=1, pady=20, padx=5)
 
         allfnctns_moveto_button = Button(allfnctnsF_status, image=movetosmall, command=lambda: (self.open_move()), bootstyle='secondary outline')
-        allfnctns_moveto_button.grid(row=14, column=0, pady=20, padx=5)
+        allfnctns_moveto_button.grid(row=19, column=0, pady=20, padx=5)
         allfnctns_moveto_label = Label(allfnctnsF_status, text='Move to...', font=('Calibri', 15))
-        allfnctns_moveto_label.grid(row=14, column=1, pady=20, padx=5)
+        allfnctns_moveto_label.grid(row=19, column=1, pady=20, padx=5)
 
         allfnctns_copyto_button = Button(allfnctnsF_status, image=copysmall, command=lambda: (self.copy_to()), bootstyle='secondary outline')
-        allfnctns_copyto_button.grid(row=15, column=0, pady=20, padx=5)
+        allfnctns_copyto_button.grid(row=20, column=0, pady=20, padx=5)
         allfnctns_copyto_label = Label(allfnctnsF_status, text='Copy to...', font=('Calibri', 15))
-        allfnctns_copyto_label.grid(row=15, column=1, pady=20, padx=5)
+        allfnctns_copyto_label.grid(row=20, column=1, pady=20, padx=5)
 
         allfnctns_deltask_button = Button(allfnctnsF_status, image=deletesmall, command=lambda: (self.deletetask()), bootstyle='secondary outline')
-        allfnctns_deltask_button.grid(row=16, column=0, pady=20, padx=5)
+        allfnctns_deltask_button.grid(row=21, column=0, pady=20, padx=5)
         allfnctns_deltask_label = Label(allfnctnsF_status, text='Delete task', font=('Calibri', 15))
-        allfnctns_deltask_label.grid(row=16, column=1, pady=20, padx=5)
+        allfnctns_deltask_label.grid(row=21, column=1, pady=20, padx=5)
 
         allfnctns_closeoverviewB = Button(TDB_F, text='❌ Close Overview', command=lambda: (self.closeallfunctions()), bootstyle='secondary outline')
         allfnctns_closeoverviewB.grid(row=0, column=0, columnspan=2, pady=5, padx=5)
@@ -1972,7 +2030,7 @@ class display_task:
         if self.new_ministep_words != '':
             conn = sqlite3.connect('info.db')
             c = conn.cursor()
-            c.execute("INSERT INTO '{}' VALUES (:words, :checked, :starred, :difficulty, :duedateday, :duedatetime, :duedateonoff, :amiaministep, :whichminiami, :importance, :notes)".format(currentlistname), {'words':self.new_ministep_words, 'checked':'unchecked', 'starred':'n', 'difficulty':'Medium', 'duedateday':time.strftime("%x"), 'duedatetime':'1200', 'duedateonoff':'off', 'amiaministep':'yes', 'whichminiami':self.number, 'importance':'1', 'notes':'Add a note...'})
+            c.execute("INSERT INTO '{}' (task, checked, starred, difficulty, duedateday, duedatetime, duedateonoff, amiaministep, whichminiami, importance, notes) VALUES (:words, :checked, :starred, :difficulty, :duedateday, :duedatetime, :duedateonoff, :amiaministep, :whichminiami, :importance, :notes)".format(currentlistname), {'words':self.new_ministep_words, 'checked':'unchecked', 'starred':'n', 'difficulty':'Medium', 'duedateday':time.strftime("%x"), 'duedatetime':'1200', 'duedateonoff':'off', 'amiaministep':'yes', 'whichminiami':self.number, 'importance':'1', 'notes':'Add a note...'})
             conn.commit()
             conn.close()
             refresh(return_=self.number)
@@ -2005,7 +2063,7 @@ class display_task:
         global allfncts_ministeps_add_msE
         if allfncts_ministeps_add_msE.get() == '+ Add mini step':
             allfncts_ministeps_add_msE.config(justify='left')
-            allfncts_ministeps_add_msE.delete(0, END)
+            allfncts_ministeps_add_msE.delete(0, 'end')
         else:
             pass
     def ministepentry_focusout(self, e):
@@ -2063,12 +2121,12 @@ class disp_ministep:
         ms_nameF_rename = Frame(root, bootstyle='default')
         ms_nameF_rename.place(in_=root, anchor='c', relx=.5, rely=.5)
         rnmms_newnameE = Entry(ms_nameF_rename, bootstyle='primary', font=('Calibri light', 20), width=20)
-        rnmms_newnameE.pack(fill=X, padx=10, pady=5)
+        rnmms_newnameE.pack(fill='x', padx=10, pady=5)
         rnmms_newnameE.insert(0, self.mini_stepname)
         rnmms_okbuttonB = Button(ms_nameF_rename, text='Ok!', bootstyle='primary', command=lambda: ministep_rename_go(rnmms_newnameE.get()))
-        rnmms_okbuttonB.pack(fill=X, padx=10, pady=5)
+        rnmms_okbuttonB.pack(fill='x', padx=10, pady=5)
         rnmms_closebuttonB = Button(ms_nameF_rename, text='X', bootstyle='primary', command=lambda: ms_nameF_rename.destroy())
-        rnmms_closebuttonB.pack(fill=X, padx=10, pady=5)
+        rnmms_closebuttonB.pack(fill='x', padx=10, pady=5)
     def ministep_checkoff(self, ms_id):
         global currentlistname
         conn = sqlite3.connect('info.db')
@@ -2089,7 +2147,7 @@ def add_task(E=None):
     if new_tasks_words != '':
         conn = sqlite3.connect('info.db')
         c = conn.cursor()
-        c.execute("INSERT INTO '{}' VALUES (:words, :checked, :starred, :difficulty, :duedateday, :duedatetime, :duedateonoff, :amiaministep, :whichminiami, :importance, :notes)".format(currentlistname), {'words':new_tasks_words, 'checked':'unchecked', 'starred':'n', 'difficulty':sql_process.check_setting('def_difficulty'), 'duedateday':time.strftime("%x"), 'duedatetime':'1200', 'duedateonoff':sql_process.check_setting('def_duedateonoff'), 'amiaministep':'no', 'whichminiami':'notamini', 'importance':'1', 'notes':sql_process.check_setting('def_note')})
+        c.execute("INSERT INTO '{}' (task, checked, starred, difficulty, duedateday, duedatetime, duedateonoff, amiaministep, whichminiami, importance, notes) VALUES (:words, :checked, :starred, :difficulty, :duedateday, :duedatetime, :duedateonoff, :amiaministep, :whichminiami, :importance, :notes)".format(currentlistname), {'words':new_tasks_words, 'checked':'unchecked', 'starred':'n', 'difficulty':sql_process.check_setting('def_difficulty'), 'duedateday':time.strftime("%x"), 'duedatetime':'1200', 'duedateonoff':sql_process.check_setting('def_duedateonoff'), 'amiaministep':'no', 'whichminiami':'notamini', 'importance':'1', 'notes':sql_process.check_setting('def_note')})
         conn.commit()
         conn.close()
         refresh(return_='False')
@@ -2112,7 +2170,7 @@ def refresh(return_):
     global listsF, smart_on, checkedtask, uncheckedtask
     listsF.destroy()
     listsF = Frame(side_barF)
-    listsF.grid(row=15, column=0, columnspan=2, sticky='nsew', padx=1, pady=2)
+    listsF.grid(row=17, column=0, columnspan=2, sticky='nsew', padx=1, pady=2)
 
     if sql_process.check_setting('ssi') == 'square':
         uncheckedtask  = PhotoImage(file='square.png')
@@ -2166,11 +2224,11 @@ def resize_side(e=None):
                     # swilF, lstnm_hidecomptasksB, lstnmeditB, lstnmdeleteB, rando_sep
                     if smart_on == 'off':
                         lstnmmoreinfoB.pack_forget()
-                        rando_sep.pack(side=LEFT)
-                        swilF.pack(side=LEFT, padx=15)
+                        rando_sep.pack(side='left')
+                        swilF.pack(side='left', padx=15)
                         lstnm_hidecomptasksB.grid(row=0, column=2, padx=20)
-                        lstnmeditB.pack(side=RIGHT, padx=5)
-                        lstnmdeleteB.pack(side=RIGHT, padx=5)
+                        lstnmeditB.pack(side='right', padx=5)
+                        lstnmdeleteB.pack(side='right', padx=5)
                     taskstopbarsize = 'showall'
 
             elif width < 1200:
@@ -2182,7 +2240,7 @@ def resize_side(e=None):
                     lstnmeditB.pack_forget()
                     lstnmdeleteB.pack_forget()
                     if smart_on == 'off':
-                        lstnmmoreinfoB.pack(side=RIGHT, padx=5)
+                        lstnmmoreinfoB.pack(side='right', padx=5)
                     taskstopbarsize = 'showless'
     except Exception as e:
         print(e)
@@ -2205,25 +2263,27 @@ def droplist():
         drplst_warningL = Label(list_nameF_drplst, text='This action cannot be undone.', font=('Calibri', 10), bootstyle='danger')
         drplst_warningL.pack(pady=5, padx=20)
         drplst_okbuttonB = Button(list_nameF_drplst, text='Ok!', bootstyle='danger outline', command=lambda: okdroptable())
-        drplst_okbuttonB.pack(fill=X, padx=20, pady=5)
+        drplst_okbuttonB.pack(fill='x', padx=20, pady=5)
         drplst_closebuttonB = Button(list_nameF_drplst, text='X', bootstyle='danger outline', command=lambda: list_nameF_drplst.destroy())
-        drplst_closebuttonB.pack(fill=X, padx=20, pady=5)
+        drplst_closebuttonB.pack(fill='x', padx=20, pady=5)
     else:
         okdroptable()
 
 def add_new_list_go(e=None):
     global nwlstnewnameE, nwlstwarningL, nwlstcloseB, currentlistname
+    get_new_list_name = nwlstnewnameE.get()
     newlistresponse = sql_process.add_list(nwlstnewnameE.get())
     nwlstwarningL.destroy()
     nwlstnewnameE.destroy()
     nwlstcloseB.destroy()
     add_listB.config(state='normal')
+    currentlistname = newlistresponse[1]
     refresh(return_='False')
 
     add_list_responseF = Frame(root, bootstyle='default')
     add_list_responseF.place(in_=root, anchor='c', relx=.5, rely=.5)
 
-    add_list_responseL = Label(add_list_responseF, text=newlistresponse, font=('Calibri', 20))
+    add_list_responseL = Label(add_list_responseF, text=newlistresponse[0], font=('Calibri', 20))
     add_list_responseL.pack(padx=20, pady=20)
 
     add_list_timeL = Label(add_list_responseF, text='(3)', font=('Calibri', 20))
@@ -2259,14 +2319,14 @@ def renamelist():
     list_nameF_rename = Frame(root, bootstyle='default')
     list_nameF_rename.place(in_=root, anchor='c', relx=.5, rely=.5)
     rnmlst_newnameE = Entry(list_nameF_rename, bootstyle='primary', font=('Calibri light', 20), width=20)
-    rnmlst_newnameE.pack(fill=X, padx=10, pady=5)
+    rnmlst_newnameE.pack(fill='x', padx=10, pady=5)
     rnmlst_newnameE.insert(0, sql_process.get_current_list_display(currentlistname)[0])
     rnmlst_warningL = Label(list_nameF_rename, text='Limit 15 charachters', bootstyle='primary', font=('Calibri', 10))
     rnmlst_warningL.pack(pady=5)
     rnmlst_okbuttonB = Button(list_nameF_rename, text='Ok!', bootstyle='primary', command=lambda: okrename_list())
-    rnmlst_okbuttonB.pack(fill=X, padx=10, pady=5)
+    rnmlst_okbuttonB.pack(fill='x', padx=10, pady=5)
     rnmlst_closebuttonB = Button(list_nameF_rename, text='X', bootstyle='primary', command=lambda: list_nameF_rename.destroy())
-    rnmlst_closebuttonB.pack(fill=X, padx=10, pady=5)
+    rnmlst_closebuttonB.pack(fill='x', padx=10, pady=5)
 
 
 def about():
@@ -2275,14 +2335,14 @@ def about():
     clear_board()
     current_design = 'about'
 
-    tasks_frame.pack(fill=BOTH, expand=True)
+    tasks_frame.pack(fill='both', expand=True)
 
     aboutheaderL = Label(tasks_frame, text='About', font=('Calibri', 50, 'bold'), bootstyle='danger')
     aboutheaderL.pack()
 
     aboutlatestversion_text = ScrolledText(tasks_frame, font=('Calibri', 10), wrap='word')
     aboutlatestversion_text.pack(padx=30, pady=15)
-    aboutlatestversion_text.insert(END, f'Latest Version: {sql_process.check_setting("version")}')
+    aboutlatestversion_text.insert('end', f'Latest Version: {sql_process.check_setting("version")}')
     aboutlatestversion_text.config(state='disabled')
 
     aboutsubheaderL = Label(tasks_frame, text='Created by: Dovid Stahler', font=('Calibri', 20), bootstyle='info')
@@ -2310,6 +2370,11 @@ def lock_crk():
 def unlock_crk():
     corkSEP.grid(row=5, pady=5, sticky='nsew', columnspan=2)
     corkB.grid(row=6, pady=5, sticky='nsew', columnspan=2)
+
+def lock_sl_myday():
+    mydayB.grid_forget()
+def unlock_sl_myday():
+    mydayB.grid(row=8, pady=5, sticky='nsew', columnspan=2)
 
 def lock_sl_str():
     sl_str_realB.grid_forget()
@@ -2378,7 +2443,7 @@ def welcome():
     welcomeF = Frame(root, bootstyle='default')
     welcomeF.place(in_=root, anchor='c', relx=.5, rely=.5)
 
-    Separator(welcomeF).pack(padx=2000, side=TOP, pady=1000)
+    Separator(welcomeF).pack(padx=2000, side='top', pady=1000)
 
     welcomeheader2L = Label(welcomeF, text='Welcome to To-Do 4!', font=('Calibri', 25))
     welcomeheader2L.pack(padx=20, pady=20)
@@ -2393,7 +2458,7 @@ def welcome():
     welcomehintL = Label(welcomeF, text=rd.choice(['From asking before doing an action to changing the shape of an icon, To-do 4 is highly customizable to your needs.', 'Break up your task efficiently with mini steps!', 'Did you know you can change the text on the Home Screen?', 'A Smart List takes all the tasks from any list which have a certain common attribute.', 'Corkboard puts all your random miscellanous bits in your mind into an organized pile.']), bootstyle='danger', font=('Calibri', 13))
     welcomehintL.pack(padx=20, pady=0)
 
-    Separator(welcomeF).pack(padx=2000, side=BOTTOM, pady=1000)
+    Separator(welcomeF).pack(padx=2000, side='bottom', pady=1000)
 
 
     while place=='welcome':
@@ -2428,7 +2493,7 @@ def password(e=None):
     lockscreenF = Frame(root, bootstyle='default')
     lockscreenF.place(in_=root, anchor='c', relx=.5, rely=.5)
 
-    Separator(lockscreenF).pack(padx=2000, side=TOP, pady=1000)
+    Separator(lockscreenF).pack(padx=2000, side='top', pady=1000)
 
     lockscreenFheader2L = Label(lockscreenF, text='To-Do 4 Security', font=('Calibri', 45), bootstyle='light')
     lockscreenFheader2L.pack(padx=2000, pady=10)
@@ -2444,7 +2509,7 @@ def password(e=None):
 
     lockscreenerrormessageL = Label(lockscreenF, text='Incorrect. Try again.', font=('Calibri', 15), bootstyle='danger')
 
-    Separator(lockscreenF).pack(padx=2000, side=BOTTOM, pady=1000)
+    Separator(lockscreenF).pack(padx=2000, side='bottom', pady=1000)
 
 def smart_starred():
     global smart_on
@@ -2570,7 +2635,7 @@ def overarchingsearch_go(search_input):
     # Display both lists
     clear_board()
     global current_design, tasks_frame
-    tasks_frame.pack(fill=BOTH, expand=True)
+    tasks_frame.pack(fill='both', expand=True)
     current_design = 'overarch search'
 
     search_headerL = Label(tasks_frame, text=f'Search: {search_input}', font=('Calibri', 30, 'bold'))
@@ -2579,13 +2644,13 @@ def overarchingsearch_go(search_input):
     search_results_numL = Label(tasks_frame, text=f'Search Results: {len(search_lists_list) + len(search_corkboard_list)}', font=('Calibri', 20))
     search_results_numL.pack(pady=5)
 
-    Separator(tasks_frame).pack(fill=X, pady=5)
+    Separator(tasks_frame).pack(fill='x', pady=5)
 
     search_subheader_lists_L = Label(tasks_frame, text='Tasks', font=('Calibri', 20))
     search_subheader_lists_L.pack(pady=5)
 
     search_subheader_lists_F = Frame(tasks_frame)
-    search_subheader_lists_F.pack(fill=X)
+    search_subheader_lists_F.pack(fill='x')
 
     for search_task in search_lists_list:
         search_number = search_task[0][0]
@@ -2599,7 +2664,7 @@ def overarchingsearch_go(search_input):
         search_list = search_task[1]
 
         search_single_taskF = Frame(tasks_frame, bootstyle='default')
-        search_single_taskF.pack(padx=10, pady=5, fill=BOTH, expand=True)
+        search_single_taskF.pack(padx=10, pady=5, fill='both', expand=True)
 
         search_startaskB = Label(search_single_taskF, image=unstarredimg, bootstyle='danger')
         search_startaskB.pack(side='left', padx=5)
@@ -2610,7 +2675,7 @@ def overarchingsearch_go(search_input):
         search_tsdL.pack(side='right', padx=5)
 
         search_taskT = Entry(search_single_taskF, bootstyle='danger', font=('Calibri', 30), foreground='#e74c3c')
-        search_taskT.pack(fill=X, expand=True, padx=5, side='right')
+        search_taskT.pack(fill='x', expand=True, padx=5, side='right')
         search_taskT.insert(0, search_name)
         search_taskT.config(state='disabled')
 
@@ -2632,17 +2697,17 @@ def overarchingsearch_go(search_input):
             search_tsdL.config(bootstyle='warning')
 
         for y in range(0,5):
-            search_single_taskF.pack(padx=10, pady=y, fill=BOTH, expand=True)
+            search_single_taskF.pack(padx=10, pady=y, fill='both', expand=True)
             root.update()
             time.sleep(.001)
 
-    Separator(tasks_frame).pack(fill=X, pady=5)
+    Separator(tasks_frame).pack(fill='x', pady=5)
 
     search_subheader_cork_L = Label(tasks_frame, text='Corkboard', font=('Calibri', 20))
     search_subheader_cork_L.pack(pady=5)
 
     search_subheader_cork_F = Frame(tasks_frame)
-    search_subheader_cork_F.pack(fill=X, pady=5)
+    search_subheader_cork_F.pack(fill='x', pady=5)
 
     for search_pin in search_corkboard_list:
         search_rowid = search_pin[0]
@@ -2651,7 +2716,7 @@ def overarchingsearch_go(search_input):
         search_color = search_pin[3]
 
         search_pin_frameF = Frame(search_subheader_cork_F, bootstyle=search_color)
-        #search_pin_frameF.pack(fill=X, padx=10, pady=10)
+        #search_pin_frameF.pack(fill='x', padx=10, pady=10)
 
         search_pin_titleL = Label(search_pin_frameF, text=search_title, font=('Calibri', 18, 'bold'), bootstyle=f'{search_color} inverse')
         search_pin_titleL.pack(pady=5)
@@ -2660,7 +2725,7 @@ def overarchingsearch_go(search_input):
         search_pin_actualL.pack(pady=5)
 
         for y in range(0,10):
-            search_pin_frameF.pack(padx=10, pady=y, fill=BOTH, expand=True)
+            search_pin_frameF.pack(padx=10, pady=y, fill='both', expand=True)
             root.update()
             time.sleep(.001)
 
@@ -2727,9 +2792,37 @@ def attemptunlockpswdman(attempt):
     if attempt == sql_process.check_setting('pin'):
         unlock_pswd_manager()
 
+def my_day_launch():
+    clear_board()
+    global current_design, currentlistname, tasksleftL, myday_weekviewW
+    current_design = 'myday'
+    tasksleftL.configure(text='            My Day')
+
+    myday_weekviewW = WeekView(
+        backFrame,
+        get_list_display=lambda ln: sql_process.get_current_list_display(ln)[0],
+        on_task_toggle=lambda: refresh(return_='False')
+    )
+    myday_weekviewW.pack(fill='both', expand=True)
+
+
+    # -------- Launch notes -------------
+    open_my_day_launch()
+
+def open_my_day_launch():
+    """Shows the My Day intro/notes popup every time this screen opens."""
+    announcer_more(
+        'My Day',
+        'A focused view of what needs to happen today.',
+        'Welcome to My Day!',
+        "My Day pulls together everything due today (and any day you pick) from all your lists in one place.\n\n"
+        "Use the strip up top to jump between days, tap Today to snap back, and check tasks off right from here -- no need to dig through individual lists.\n\n"
+        "Please email dovidstahler9@gmail.com for any suggestions or technical errors."
+    )
+
 # ----------- Top Bar -----------
 main_headerF = Frame(bootstyle='default')
-main_headerF.pack(fill=X)
+main_headerF.pack(fill='x')
 
 welcomeheaderL = Label(main_headerF, text='Good to see ya!', font=('Calibri', 40, 'bold'), bootstyle='Default')
 welcomeheaderL.grid(row=0, column=0, padx=5)
@@ -2744,8 +2837,8 @@ searchbargoB = Button(main_headerF, text='Go', style='warning.Outline.TButton', 
 searchbargoB.grid(row=0, column=5, sticky='e')
 
 # ----------- Side Bar -----------
-side_barF = ScrolledFrame(bootstyle='Default round', width=157, autohide=True)
-side_barF.pack(fill=Y, side=LEFT)
+side_barF = ScrolledFrame(bootstyle='Default round', width=157, autohide=False)
+side_barF.pack(fill='y', side='left')
 
 tasksleftL = Label(side_barF, text='To Do 4.3 Beta', font=('Calibri', 12), bootstyle='warning')
 tasksleftL.grid(row=0, column=0, columnspan=2, pady=1, sticky='nsew', padx=1)
@@ -2774,50 +2867,60 @@ if sql_process.check_setting('crk') == 'y':
     corkSEP.grid(row=5, pady=5, sticky='nsew', columnspan=2)
     corkB.grid(row=6, pady=5, sticky='nsew', columnspan=2)
 
+# ---------------- MY DAY ----------------
+my_day_style = Style()
+my_day_style.configure('light.Outline.TButton', font=('Calibri', 15, 'bold'))
+
+myday_SEP = Separator(side_barF)
+mydayB = Button(side_barF, text='My Day', style='light.Outline.TButton', command=lambda: my_day_launch())
+if sql_process.check_setting('sl_myday') == 'y':
+    #myday_SEP.grid(row=7, pady=5, sticky='nsew', columnspan=2)
+    mydayB.grid(row=8, pady=5, sticky='nsew', columnspan=2)
+
 # ---------------- SMART LISTS ----------------
 smartySEP = Separator(side_barF)
 
 smartlists_headerL = Label(side_barF, text='Smart Lists', font=('Calibri', 15, 'bold'), bootstyle='dark inverse')
 
 if sql_process.check_setting('sl_str') == 'y' or sql_process.check_setting('sl_evr') == 'y' or sql_process.check_setting('sl_unch') == 'y' or sql_process.check_setting('sl_dtdy') == 'y':
-    smartySEP.grid(row=7, pady=5, sticky='nsew', columnspan=2)
-    smartlists_headerL.grid(row=8, column=0, pady=1, sticky='nsew', padx=1, columnspan=2)
+    smartySEP.grid(row=9, pady=5, sticky='nsew', columnspan=2)
+    smartlists_headerL.grid(row=10, column=0, pady=1, sticky='nsew', padx=1, columnspan=2)
 
 sl_str_realB = Button(side_barF, text='Starred', bootstyle='dark', command=lambda: smart_starred())
 if sql_process.check_setting('sl_str') == 'y':
-    sl_str_realB.grid(row=9, column=0, pady=1, sticky='nsew', padx=1, columnspan=2)
+    sl_str_realB.grid(row=11, column=0, pady=1, sticky='nsew', padx=1, columnspan=2)
 sl_evr_realB = Button(side_barF, text='Everything', bootstyle='dark', command=lambda: smart_everything())
 if sql_process.check_setting('sl_evr') == 'y':
-    sl_evr_realB.grid(row=10, column=0, pady=1, sticky='nsew', padx=1, columnspan=2)
+    sl_evr_realB.grid(row=12, column=0, pady=1, sticky='nsew', padx=1, columnspan=2)
 sl_unch_realB = Button(side_barF, text='Unchecked', bootstyle='dark', command=lambda: smart_unchecked())
 if sql_process.check_setting('sl_unch') == 'y':
-    sl_unch_realB.grid(row=11, column=0, pady=1, sticky='nsew', padx=1, columnspan=2)
+    sl_unch_realB.grid(row=13, column=0, pady=1, sticky='nsew', padx=1, columnspan=2)
 sl_dtdy_realB = Button(side_barF, text='Due Today', bootstyle='dark', command=lambda: smart_duetoday())
 if sql_process.check_setting('sl_dtdy') == 'y':
-    sl_dtdy_realB.grid(row=12, column=0, pady=1, sticky='nsew', padx=1, columnspan=2)
+    sl_dtdy_realB.grid(row=14, column=0, pady=1, sticky='nsew', padx=1, columnspan=2)
 
 # ----------------- LISTS -----------------
-Separator(side_barF).grid(row=13, pady=5, sticky='nsew', columnspan=2)
+Separator(side_barF).grid(row=15, pady=5, sticky='nsew', columnspan=2)
 
 lists_headerL = Label(side_barF, text='Lists', font=('Calibri', 30), bootstyle='secondary inverse', foreground='black')
-lists_headerL.grid(row=14, column=0, pady=1, sticky='nsew', padx=1)
+lists_headerL.grid(row=16, column=0, pady=1, sticky='nsew', padx=1)
 
 add_listB = Button(side_barF, image=newlistimg, command=lambda: add_new_list(), bootstyle='secondary')
-add_listB.grid(row=14, column=1, sticky='nsew', pady=1, padx=1)
+add_listB.grid(row=16, column=1, sticky='nsew', pady=1, padx=1)
 
 global listsF
 listsF = Frame(side_barF)
-listsF.grid(row=15, column=0, columnspan=2, sticky='nsew', padx=1, pady=2)
+listsF.grid(row=17, column=0, columnspan=2, sticky='nsew', padx=1, pady=2)
 
 conn = sqlite3.connect('info.db')
 c = conn.cursor()
 
 # ----------- All Tasks Section -----------
-global backFrame, tasks_frame
+global backFrame
 backFrame = Frame(root, bootstyle='dark')
-backFrame.pack(fill=BOTH, expand=True)
+backFrame.pack(fill='both', expand=True)
 
-tasks_frame = ScrolledFrame(backFrame, bootstyle='Default, round', width=190)
+tasks_frame = ScrolledFrame(backFrame, bootstyle='default-round', width=190)
 
 root.bind('<Configure>', resize_side, add='+')
 root.bind('<Home>', home_design)
@@ -2840,6 +2943,10 @@ if sql_process.check_setting('pino') == 'on':
     password()
     checkunlocked()
     root.bind('<Return>', checkunlocked)
+
+# dev options
+#manually_delete_listB = Button(root, text='Manually delete list. (No confimation)', command=lambda: sql_process.delete_list(currentlistname))
+#manually_delete_listB.pack()
 
 # ---------------------------------
 root.mainloop()

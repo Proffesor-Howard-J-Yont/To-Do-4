@@ -61,6 +61,41 @@ def migrate_corkboard_content():
         c_user000.execute("ALTER TABLE corkboard ADD COLUMN image_path TEXT")
     conn_user000.commit()
 
+def migrate_task_schedule_columns():
+    """Adds schedule_date, schedule_start, schedule_duration to every task
+    table (independent of due-date columns). Safe to call every startup --
+    no-ops once present."""
+    c.execute("SELECT * FROM sqlite_master WHERE type='table'")
+    all_tables = c.fetchall()
+    needed = {
+        'schedule_date': 'TEXT',
+        'schedule_start': 'TEXT',
+        'schedule_duration': 'TEXT',
+    }
+    for table in all_tables:
+        table_name = table[1]
+        if table_name == 'sqlite_sequence':
+            continue
+        try:
+            c.execute("PRAGMA table_info('{}')".format(table_name))
+            existing_cols = [col[1] for col in c.fetchall()]
+        except sqlite3.OperationalError:
+            continue
+        for col, coltype in needed.items():
+            if col not in existing_cols:
+                try:
+                    c.execute("ALTER TABLE '{}' ADD COLUMN {} {}".format(table_name, col, coltype))
+                except sqlite3.OperationalError:
+                    continue
+    conn.commit()
+
+def ensure_setting(initials, default_yn):
+    """Insert a Settings row with a default value if one doesn't already
+    exist for this key. Safe to call every startup."""
+    c_user000.execute("SELECT setyn FROM Settings WHERE setting_name=?", (initials,))
+    if c_user000.fetchone() is None:
+        add_setting(initials, default_yn)
+
 def migrate_corkboard_schema():
     """Adds all corkboard columns introduced since the original 3-column
     version, if missing. Safe to call every startup -- no-ops once present."""
@@ -74,14 +109,12 @@ def migrate_corkboard_schema():
     }
     for col, coltype in needed.items():
         if col not in existing_cols:
-            c_user000.execute(f"ALTER TABLE corkboard ADD COLUMN {col} {coltype}")
+            #c_user000.execute(f"ALTER TABLE corkboard ADD COLUMN {col} {coltype}")
+            pass
     conn_user000.commit()
 
 def update_pin_position(rowid, x, y):
-    c_user000.execute(
-        "UPDATE corkboard SET position_x=?, position_y=? WHERE rowid=?",
-        (x, y, rowid)
-    )
+    c_user000.execute("UPDATE corkboard SET position_x=?, position_y=? WHERE rowid=?",(x, y, rowid))
     conn_user000.commit()
 
 def update_pin_content(rowid, title, content_json, image_path):
@@ -117,11 +150,11 @@ def add_list(displayname):
         r10l_result = ''.join(creepy_hidden_nameL)
         c_user000.execute('''INSERT INTO list_names VALUES ('{}','{}','{}','{}','{}')'''.format(newdisplayname1, r10l_result, 'This list is not in a stack.', 'Standard', 'Medium'))
         conn_user000.commit()
-        c.execute("""CREATE TABLE '{}' (task text, checked text, starred text, difficulty text, duedateday text, duedatetime text, duedateonoff text, amiaministep text, whichminiami text, importance text, notes text)""".format(r10l_result))
+        c.execute("""CREATE TABLE '{}' (task text, checked text, starred text, difficulty text, duedateday text, duedatetime text, duedateonoff text, amiaministep text, whichminiami text, importance text, notes text, schedule_date text, schedule_start text, schedule_duration text)""".format(r10l_result))
         conn.commit()
-        return 'List has been created successfully.'
+        return ['List has been created successfully.', r10l_result]
     else:
-        return 'An error has occured: Input is either over 15 letters, or is just spaces.'
+        return ['An error has occured: Input is either over 15 letters, or is just spaces.', 'customers']
         # list_names: display_name, hidden_name, stack, color, hiarchy
 def delete_list(deletee):
     if deletee != 'customers':
@@ -194,6 +227,7 @@ def delete_setting(initials):
 #sdfh = c_user000.fetchall()
 #for asdf in sdfh:
 #    print(asdf[4])
+#    print('yooo')
 #def_folder, customers
 
 #print('Welcome to the To-Do 4 Sqlite3 Processes Hub!\nYou can reach me at dovidstahler9@gmail.com.')

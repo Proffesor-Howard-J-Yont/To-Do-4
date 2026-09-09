@@ -246,16 +246,19 @@ class LinkConfirmPopup:
 
         self._bind_id = root.bind_all('<ButtonPress-1>', self._maybe_dismiss, add='+')
 
+        self.win.update_idletasks()
+
     def _open(self, url):
         webbrowser.open(url)
         self.close()
 
     def _maybe_dismiss(self, event):
-        try:
-            if event.widget.winfo_toplevel() != self.win:
-                self.close()
-        except tk.TclError:
-            self.close()
+        pass
+        #try:
+        #    if event.widget.winfo_toplevel() != self.win:
+        #        self.close()
+        #except tk.TclError:
+        #    self.close()
 
     def close(self):
         if LinkConfirmPopup._active is self:
