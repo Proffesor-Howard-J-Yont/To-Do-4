@@ -5,6 +5,7 @@ from ttkbootstrap import *
 from ttkbootstrap.widgets import ScrolledFrame
 from ttkbootstrap.dialogs import Querybox
 from ttkbootstrap.widgets import ToolTip
+from ttkbootstrap.internal import wheel
 import sqlite3
 from tkinter import filedialog
 import time
@@ -33,7 +34,7 @@ return2_ = 'False'
 undone_tasks = 0
 root = Window(themename='darkly')
 # vapor, cyborg, minty, lumen, darkly, superhero
-root.title("To-Do 4.3 Beta - A new and innovative tasks organizer. - Corkboard Update 2.2.0")
+root.title("To-Do 4.4 Beta - A new and innovative tasks organizer. - My Day v1.0")
 root.geometry('1200x800+300+100')
 root.iconbitmap('icon.ico')
 
@@ -334,7 +335,7 @@ def tasks_design():
     tasksleftL.config(text='               List')
     # ----------- Task Details Bar -----------
     global TDB_F, TDBnoshow, taskE, lstnmNameL, lstnmeditB, lstnmdeleteB, tasks_frame, currentlistname, lstnm_hidecomptasksB, lstnm_swilE
-    TDB_F = ScrolledFrame(backFrame, bootstyle='default-round', width=200, autohide=False)
+    TDB_F = ScrolledFrame(backFrame, bootstyle='default-round', width=240, autohide=False)
     TDB_F.pack(fill='y', side='right')
 
     TDBnoshow = Label(TDB_F, bootstyle='secondary', text="Click on a task to\nsee it's details.", font=('Calibri', 17, 'bold'), foreground='white')
@@ -502,7 +503,7 @@ class VStretchScrollFrame(Frame):
         super().__init__(parent, **kwargs)
         self.canvas = tk.Canvas(self, highlightthickness=0)
         self.vscroll = Scrollbar(self, orient='vertical', command=self.canvas.yview)
-        self.canvas.configure(yscrollcommand=self.vscroll.set)
+        self.canvas.configure(yscrollcommand=self.vscroll.set, yscrollincrement=1)
         self.canvas.pack(side='left', fill='both', expand=True)
 
         self.inner = Frame(self.canvas, bootstyle='dark')
@@ -510,6 +511,45 @@ class VStretchScrollFrame(Frame):
 
         self.inner.bind('<Configure>', self._on_inner_configure)
         self.canvas.bind('<Configure>', self._on_canvas_configure)
+        self._bind_scroll(self.canvas)
+
+    def _bind_scroll(self, widget):
+        """Binds two-finger/wheel scrolling on `widget` and every current
+        descendant, recursively. This is a hand-built Canvas (like
+        FreeformCorkboard's), not a ttkbootstrap ScrolledFrame, so the
+        app's global ScrolledFrame-based wheel dispatcher (main.py,
+        _scroll_target_mousewheel/_scroll_target_touchpad) doesn't see it
+        at all -- and binding only on self.canvas wouldn't be enough
+        either, since home_design() fills self.inner with widgets (the
+        meter, clock, list buttons, task rows...) that are themselves
+        embedded child windows once nested inside this canvas, so hovering
+        any of them delivers the event to that widget, not the canvas.
+        Call this again after adding new content (home_design() does, at
+        the end, once everything for that screen is built) to cover it.
+
+        Stops at any nested ScrolledFrame (e.g. the "Altogether" and
+        per-list task widgets on this screen) rather than binding into
+        it -- those already own their scrolling via the app's global
+        ScrolledFrame dispatcher (_scroll_target_mousewheel/_touchpad in
+        this file), and binding here too would fire BOTH handlers for one
+        gesture, scrolling this outer canvas and the inner list at once."""
+        if isinstance(widget, ScrolledFrame):
+            return
+        widget.bind('<MouseWheel>', self._on_wheel_scroll)
+        if wheel.has_touchpad_scroll():
+            widget.bind(wheel.TOUCHPAD_SCROLL, self._on_touchpad_scroll)
+        for child in widget.winfo_children():
+            self._bind_scroll(child)
+
+    def _on_wheel_scroll(self, event):
+        self.canvas.yview_scroll(int(-1 * event.delta), 'units')
+
+    def _on_touchpad_scroll(self, event):
+        # yscrollincrement=1, so a precise pixel delta maps directly to a
+        # 'units' scroll amount -- no accumulation needed.
+        _, dy = wheel.precise_deltas(event)
+        if dy:
+            self.canvas.yview_scroll(-dy, 'units')
 
     def _on_inner_configure(self, event):
         self.canvas.configure(scrollregion=self.canvas.bbox('all'))
@@ -740,6 +780,11 @@ def home_design(e=None):
     apply_home_layout(homewidgetsize)
 
     run_clock()
+
+    # Re-walk and (re)bind scrolling now that every widget for this screen
+    # has actually been built -- see VStretchScrollFrame._bind_scroll's
+    # docstring for why this can't just be done once at construction time.
+    home_middleF._bind_scroll(home_middleF.inner)
 
 def def_difficulty_edit(new_def):
     if new_def == 'None' or new_def == 'Very Easy' or new_def == 'Easy' or new_def == 'Medium' or new_def == 'Hard' or new_def == 'Extra Hard' or new_def == 'Tedious' or new_def == 'Unsure':
@@ -1454,9 +1499,9 @@ class display_task:
         self.whichminiami = item[9]
         self.importance = item[10]
         self.notes = item[11]
-        self.schedule_date = item[12] if len(item) > 12 else ''
-        self.schedule_start = item[13] if len(item) > 13 else ''
-        self.schedule_duration = item[14] if len(item) > 14 else ''
+        self.schedule_date = (item[12] if len(item) > 12 else '') or ''
+        self.schedule_start = (item[13] if len(item) > 13 else '') or ''
+        self.schedule_duration = (item[14] if len(item) > 14 else '') or ''
 
         if self.amiaministep == 'no':
             numotasks += 1
@@ -1853,7 +1898,7 @@ class display_task:
         except Exception as e:
             print(e)
         TDBnoshow.config(text='')
-        TDB_F.config(width=200)
+        TDB_F.config(width=240)
         allfnctns_labelname = Label(TDB_F, text=self.name, font=('Calibri', 20, 'bold'), wraplength=160)
         allfnctns_labelname.grid(row=1, column=0, pady=10, padx=10)
         allfnctns_listname = Label(TDB_F, text=sql_process.get_current_list_display(self.listname)[0], font=('Calibri', 15), wraplength=160)
@@ -1931,7 +1976,7 @@ class display_task:
         #allfnctns_duedateday_label = Label(allfnctnsF_status, text=self.duedateday, font=('Calibri', 15))
         #allfnctns_duedateday_label.grid(row=8, column=1, pady=20, padx=5)
 
-        allfnctns_duedateday_de = DateEntry(allfnctnsF_status, bootstyle='secondary', firstweekday=6)
+        allfnctns_duedateday_de = DateEntry(allfnctnsF_status, bootstyle='secondary', firstweekday=6, width=9)
         allfnctns_duedateday_de.grid(row=8, column=0, pady=5, padx=5, columnspan=2)
         allfnctns_duedateday_de.entry.delete(0, 'end')
         allfnctns_duedateday_de.entry.insert(0, self.duedateday)
@@ -1943,26 +1988,35 @@ class display_task:
             allfnctns_duedateday_de.grid_forget()
             allfnctns_duedateday_savebutton.grid_forget()
 
-        allfnctns_schedule_headerL = Label(allfnctnsF_status, text='Schedule (My Day)', font=('Calibri', 13), bootstyle='primary')
+        allfnctns_schedule_headerL = Label(allfnctnsF_status, text='Schedule', font=('Calibri', 13), bootstyle='primary', wraplength=160)
         allfnctns_schedule_headerL.grid(row=10, column=0, columnspan=2, pady=(10, 0))
 
-        allfnctns_schedule_de = DateEntry(allfnctnsF_status, bootstyle='secondary', firstweekday=6)
+        allfnctns_schedule_de = DateEntry(allfnctnsF_status, bootstyle='secondary', firstweekday=6, width=9)
         allfnctns_schedule_de.grid(row=11, column=0, pady=5, padx=5, columnspan=2)
         allfnctns_schedule_de.entry.delete(0, 'end')
         allfnctns_schedule_de.entry.insert(0, self.schedule_date)
 
-        allfnctns_schedule_startE = Entry(allfnctnsF_status, font=('Calibri', 13), width=8, justify='center')
-        allfnctns_schedule_startE.grid(row=12, column=0, pady=5, padx=5)
+        # Packed side-by-side inside their own sub-frame (rather than
+        # placed directly into columns 0/1) so their width doesn't widen
+        # this panel's narrow icon-button column -- TDB_F is a fixed
+        # ~200px ScrolledFrame with no horizontal scroll, so any single
+        # cell wider than its column's usual content pushes later rows
+        # off the clickable area.
+        allfnctns_schedule_timeF = Frame(allfnctnsF_status)
+        allfnctns_schedule_timeF.grid(row=12, column=0, columnspan=2, pady=5, padx=5)
+
+        allfnctns_schedule_startE = Entry(allfnctns_schedule_timeF, font=('Calibri', 12), width=5, justify='center')
+        allfnctns_schedule_startE.pack(side='left', padx=2)
         allfnctns_schedule_startE.insert(0, self.schedule_start if self.schedule_start else 'HHMM')
 
-        allfnctns_schedule_durationE = Entry(allfnctnsF_status, font=('Calibri', 13), width=8, justify='center')
-        allfnctns_schedule_durationE.grid(row=12, column=1, pady=5, padx=5)
+        allfnctns_schedule_durationE = Entry(allfnctns_schedule_timeF, font=('Calibri', 12), width=5, justify='center')
+        allfnctns_schedule_durationE.pack(side='left', padx=2)
         allfnctns_schedule_durationE.insert(0, self.schedule_duration if self.schedule_duration else 'mins')
 
         allfnctns_schedule_savebutton = Button(allfnctnsF_status, text='Save', command=lambda: (self.set_schedule(allfnctns_schedule_de.entry.get(), allfnctns_schedule_startE.get(), allfnctns_schedule_durationE.get())), bootstyle='secondary outline')
         allfnctns_schedule_savebutton.grid(row=13, column=0, columnspan=2, pady=5, padx=5)
 
-        allfnctns_schedule_clearbutton = Button(allfnctnsF_status, text='Remove from My Day', command=lambda: (self.clear_schedule()), bootstyle='danger outline')
+        allfnctns_schedule_clearbutton = Button(allfnctnsF_status, text='Unschedule', command=lambda: (self.clear_schedule()), bootstyle='danger outline')
         allfnctns_schedule_clearbutton.grid(row=14, column=0, columnspan=2, pady=5, padx=5)
 
         Separator(allfnctnsF_status).grid(row=15, column=0, columnspan=2, sticky='nsew')
@@ -2792,6 +2846,25 @@ def attemptunlockpswdman(attempt):
     if attempt == sql_process.check_setting('pin'):
         unlock_pswd_manager()
 
+def open_task_detail_from_myday(rowid, list_name):
+    """Bridges My Day's right-click 'Open full task view' back into the
+    existing task detail flow -- switches to the task's list (building a
+    fresh TDB_F/tasks_frame via get_tasks/tasks_design) and opens that
+    task's detail panel directly, skipping the row-widget rendering
+    disp_normaltask would otherwise trigger, since only the panel is
+    wanted here."""
+    global currentlistname
+    currentlistname = list_name
+    get_tasks('none', list_name)
+    conn = sqlite3.connect('info.db')
+    c = conn.cursor()
+    c.execute("SELECT rowid, * FROM '{}' WHERE rowid=?".format(list_name), (rowid,))
+    item = c.fetchone()
+    conn.close()
+    if item:
+        task = display_task(item, 'Normal List', list_name)
+        task.allfunctions()
+
 def my_day_launch():
     clear_board()
     global current_design, currentlistname, tasksleftL, myday_weekviewW
@@ -2801,22 +2874,24 @@ def my_day_launch():
     myday_weekviewW = WeekView(
         backFrame,
         get_list_display=lambda ln: sql_process.get_current_list_display(ln)[0],
-        on_task_toggle=lambda: refresh(return_='False')
+        on_task_toggle=None,
+        open_task_detail=lambda rid, ln: open_task_detail_from_myday(rid, ln)
     )
     myday_weekviewW.pack(fill='both', expand=True)
 
 
     # -------- Launch notes -------------
-    open_my_day_launch()
+    #open_my_day_launch()
 
 def open_my_day_launch():
     """Shows the My Day intro/notes popup every time this screen opens."""
     announcer_more(
         'My Day',
-        'A focused view of what needs to happen today.',
+        "A focused view of what you've planned for today.",
         'Welcome to My Day!',
-        "My Day pulls together everything due today (and any day you pick) from all your lists in one place.\n\n"
-        "Use the strip up top to jump between days, tap Today to snap back, and check tasks off right from here -- no need to dig through individual lists.\n\n"
+        "My Day shows your plan for the day -- not what's due, what you've actually scheduled.\n\n"
+        "Give a task a date (and optionally a start time + duration) from its detail view and it'll show up here as a timeline block or an all-day banner. Nothing appears unless you've scheduled it.\n\n"
+        "Use the strip up top to jump between days, tap Today to snap back, and tap Suggestions to see starred tasks worth scheduling.\n\n"
         "Please email dovidstahler9@gmail.com for any suggestions or technical errors."
     )
 
@@ -2924,6 +2999,62 @@ tasks_frame = ScrolledFrame(backFrame, bootstyle='default-round', width=190)
 
 root.bind('<Configure>', resize_side, add='+')
 root.bind('<Home>', home_design)
+
+def _find_enclosing_scrolledframe(widget):
+    w = widget
+    while w is not None:
+        if isinstance(w, ScrolledFrame):
+            return w
+        w = getattr(w, 'master', None)
+    return None
+
+def _scroll_target_mousewheel(event):
+    """Global two-finger/wheel scroll dispatcher for every ScrolledFrame
+    in the app (tasks_frame, TDB_F, settings, the list picker, etc.) --
+    walks up from whatever widget the event actually landed on to find
+    its enclosing ScrolledFrame and scrolls that one. This covers hovering
+    any content widget inside a ScrolledFrame, or the frame's own body,
+    not just its scrollbar.
+
+    ScrolledFrame's own built-in hover-based enable/disable (apply a wheel
+    bindtag to the whole content subtree on <Enter> of its outer
+    container, remove it on <Leave>) doesn't work in practice: the
+    container's own background is entirely covered by its canvas and
+    scrollbar, so <Enter>/<Leave> on the container basically never fires
+    from ordinary mouse movement -- only the scrollbar (which has its own
+    OS-level wheel handling, independent of that mechanism) ever
+    responds. Since tasks_frame and friends are destroyed and rebuilt on
+    every screen navigation (clear_board()), a fix tied to any specific
+    instance would need to be reapplied constantly; binding globally once
+    here covers every current and future instance automatically, since it
+    resolves the target from the event itself rather than from a
+    pre-registered widget.
+
+    Delegates to ScrolledFrame's own (private but stable-in-practice)
+    _on_mousewheel, which already has the right notch-to-scroll-amount
+    math and the "content already fits" guard -- reimplementing that here
+    would just duplicate it and risk drifting out of sync."""
+    target = _find_enclosing_scrolledframe(event.widget)
+    if target is not None:
+        target._on_mousewheel(event)
+
+def _scroll_target_touchpad(event):
+    """Same dispatch as _scroll_target_mousewheel, for precise-delta
+    trackpad gestures. Tk 9 (TkVersion >= 8.7) delivers EVERY Apple
+    trackpad/Magic Mouse/Magic Trackpad scroll as <TouchpadScroll> and
+    never as <MouseWheel> at all -- binding only <MouseWheel> (as an
+    earlier version of this fix did) left real two-finger scrolling
+    completely dead on this Tk version despite working correctly in
+    synthetic <MouseWheel> tests, since those never exercised the actual
+    event Tk generates for a real trackpad."""
+    target = _find_enclosing_scrolledframe(event.widget)
+    if target is not None:
+        target._on_touchpad_scroll(event)
+
+for _seq in wheel.wheel_sequences(root):
+    root.bind_all(_seq, _scroll_target_mousewheel, add='+')
+if wheel.has_touchpad_scroll():
+    root.bind_all(wheel.TOUCHPAD_SCROLL, _scroll_target_touchpad, add='+')
 # ------------------------------------------
 #announcer('Introducing Corkboard!', "For miscellaneous notes which don't belong in a list!", 'Corkboard', "Corkboard is your new every day companion for notes which don't exactly fit in a list.\n\n'Pick up kids from school at 4.'\n\nThat may not fit in any list, and that's why Corkboard is here.")
 #announcer('Nearing Completion!', "To-Do 4 is almost at the finish line!", "Almost there!", "There are very few things left to do (no pun intended) until this beautiful program is complete.\n\nPlease email dovidstahler9@gmail.com for any suggestions or technical errors.")
@@ -2932,7 +3063,8 @@ root.bind('<Home>', home_design)
 #announcer('COMING SOON!', "It's a mystery! Detective YOU is on the case!", "Coming soon to To-do 4!", "We'll give you a hint. The initials for this exciting new feature are D.A.D.\n\nStay tuned to find out more about this revolutionary new feature!")
 #announcer("IT'S A... IT'S A...!", "It's Drag and Drop!!!", "Coming NOW to To-do 4!", "Try dragging a task into another list!! It will move that task and all it's substeps!!")
 #announcer('REVOLUTIONARY!!', "Imagine being able to locate settings and help faster than ever!", "Introducing Assistant.", "Simply press Alt + z to activate the assistant! It's so easy I could cry! Just kidding. It's so easy I could burst with joy! Fooled you! I can't burst with joy. But I could be overjoyed!! And I am!!")
-announcer('CORKBOARD 2.0 has arrived!', "Corkboard has been completely redesigned!", "Corkboard 2.0 is here!", "Corkboard has been completely redesigned. Pins are now easier to read, and the corkboard is more organized than ever! Get ready for draggable pins, pictures, font customization, and more! Check it out now!")
+#announcer('CORKBOARD 2.0 has arrived!', "Corkboard has been completely redesigned!", "Corkboard 2.0 is here!", "Corkboard has been completely redesigned. Pins are now easier to read, and the corkboard is more organized than ever! Get ready for draggable pins, pictures, font customization, and more! Check it out now!")
+announcer('MY DAY, REBUILT!', "It's no longer about what's due -- it's about your plan.", 'Welcome to the new My Day!', "My Day has been completely redesigned around scheduling, not due dates.\n\nGive any task a date (and optionally a start time + duration) from its detail view, and it'll show up on My Day's timeline or as an all-day banner. Nothing shows up there unless you've actually planned it -- due dates alone won't put it on My Day anymore.\n\nTap the Suggestions button in My Day to see starred tasks worth scheduling, and add them with one tap.\n\nDue dates still work exactly like they always have everywhere else in the app, including the Due Today smart list -- My Day is just its own thing now.\n\nPlease email dovidstahler9@gmail.com for any suggestions or technical errors.")
 refresh(return_='False')
 home_design()
 if sql_process.check_setting('socork') == 'y' and sql_process.check_setting('crk') == 'y':

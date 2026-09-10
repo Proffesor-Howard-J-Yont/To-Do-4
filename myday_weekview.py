@@ -41,6 +41,7 @@ import tkinter as tk
 from datetime import date, timedelta
 from ttkbootstrap import Frame, Label, Button, ScrolledFrame, Separator, Scrollbar
 from ttkbootstrap.style import Style as BSStyle
+from ttkbootstrap.internal import wheel
 
 DAY_STRIP_SPAN = 3  # days shown on either side of the selected date (3 -> 7-day strip)
 CELL_HEIGHT_PX = 50
@@ -48,6 +49,11 @@ HOUR_HEIGHT_PX = 60  # 1 pixel == 1 minute, so duration math is a direct pixel c
 TIMELINE_LABEL_WIDTH = 55
 TIMELINE_BLOCK_WIDTH = 420
 TIMELINE_WIDTH = TIMELINE_LABEL_WIDTH + TIMELINE_BLOCK_WIDTH
+DEFAULT_TIMED_DURATION_MIN = 60  # used when an all-day task is dragged into the timeline
+DRAG_SNAP_MIN = 15
+AUTOSCROLL_MARGIN_PX = 30  # how close to the canvas top/bottom edge triggers auto-scroll
+AUTOSCROLL_STEP_UNITS = 12  # px per auto-scroll tick (yscrollincrement=1, so this is pixels)
+AUTOSCROLL_INTERVAL_MS = 30
 
 
 def _iter_task_tables(cursor):
@@ -124,13 +130,18 @@ class WeekView(Frame):
     on_task_toggle() is an optional callback fired after a task is
     checked/unchecked or scheduled, so the host app can refresh sidebar
     counters etc.
+    open_task_detail(rowid, list_name) is an optional callback for the
+    right-click menu's "Open full task view" action -- everything not
+    related to scheduling (due date, notes, move, copy) lives there
+    rather than being duplicated in this module.
     """
 
-    def __init__(self, parent, get_list_display, on_task_toggle=None, **kwargs):
+    def __init__(self, parent, get_list_display, on_task_toggle=None, open_task_detail=None, **kwargs):
         kwargs.setdefault('bootstyle', 'default')
         super().__init__(parent, **kwargs)
         self.get_list_display = get_list_display
         self.on_task_toggle = on_task_toggle
+        self.open_task_detail = open_task_detail
         self.selected_date = date.today()
         # The 7-day window shown in the strip is tracked separately from
         # the selected day -- only the arrow buttons (and Today) move
@@ -144,7 +155,7 @@ class WeekView(Frame):
         self.header_F = Frame(self, bootstyle='default')
         self.header_F.pack(fill='x', pady=(10, 15), padx=15)
 
-        self.header_dateL = Label(self.header_F, font=('Calibri', 28, 'bold'), bootstyle='default inverse')
+        self.header_dateL = Label(self.header_F, font=('Calibri', 28, 'bold'), bootstyle='default', foreground='pink')
         self.header_dateL.pack(side='left')
 
         self.header_dowL = Label(self.header_F, font=('Calibri', 16, 'bold'), bootstyle='info')
@@ -180,8 +191,29 @@ class WeekView(Frame):
                                            command=self.timeline_canvas.yview, bootstyle='secondary-round')
         self.timeline_vscroll.pack(side='right', fill='y')
         self.timeline_canvas.config(yscrollcommand=self.timeline_vscroll.set,
-                                     scrollregion=(0, 0, TIMELINE_WIDTH, 24 * HOUR_HEIGHT_PX))
-        self.timeline_canvas.bind('<MouseWheel>', lambda e: self.timeline_canvas.yview_scroll(int(-1 * e.delta), 'units'))
+                                     scrollregion=(0, 0, TIMELINE_WIDTH, 24 * HOUR_HEIGHT_PX),
+                                     yscrollincrement=1)
+        # Bound directly on the canvas -- an Enter/Leave-based "only while
+        # hovering" toggle doesn't work here, because each block is a
+        # genuine embedded child *window* (create_window), not just drawn
+        # pixels: the moment the pointer crosses onto one, X11/Tk deliver
+        # <Leave> to the canvas and <Enter> to the block instead, so a
+        # canvas-only Enter/Leave toggle disables scrolling the instant
+        # the cursor is over any block -- exactly where it usually is.
+        # Every block's widgets get this same binding individually at
+        # creation time in _render_timeline/_render_allday_banners.
+        #
+        # Both <MouseWheel> AND <TouchpadScroll> are bound: on Tk 9 (this
+        # app's Tk), every Apple trackpad/Magic Mouse/Magic Trackpad fires
+        # ONLY <TouchpadScroll>, never <MouseWheel> at all -- a real
+        # two-finger gesture wouldn't have triggered a <MouseWheel>-only
+        # binding no matter how correct its handler was.
+        self.timeline_canvas.bind('<MouseWheel>', self._on_timeline_scroll)
+        if wheel.has_touchpad_scroll():
+            self.timeline_canvas.bind(wheel.TOUCHPAD_SCROLL, self._on_timeline_touchpad_scroll)
+
+        self._drag = None
+        self._last_drag_event = None
 
         # ---- Suggestions overlay (built once, hidden until toggled) ----
         self.suggestions_F = Frame(self, bootstyle='dark', width=320)
@@ -289,15 +321,29 @@ class WeekView(Frame):
             bg = colors.success if checked == 'checked' else (colors.info if starred == 'y' else colors.secondary)
             chipF = tk.Frame(self.allday_F, bg=bg, highlightthickness=0)
             chipF.pack(side='left', padx=4, pady=4)
+
+            check_glyph = '✓' if checked == 'checked' else '○'
+            checkL = tk.Label(chipF, text=check_glyph, bg=bg, fg=colors.selectfg, font=('Calibri', 9),
+                               padx=4, pady=2, cursor='hand2')
+            checkL.pack(side='left')
+            checkL.bind('<Button-1>', lambda e, rid=rowid, ln=list_name, cur=checked: self._toggle(rid, ln, cur))
+
             text = task + ('  ★' if starred == 'y' else '')
             font = ('Calibri', 12, 'overstrike') if checked == 'checked' else ('Calibri', 12)
-            chipL = tk.Label(chipF, text=text, bg=bg, fg=colors.selectfg, font=font, padx=8, pady=4)
+            chipL = tk.Label(chipF, text=text, bg=bg, fg=colors.selectfg, font=font, padx=4, pady=4, cursor='fleur')
             chipL.pack(side='left')
             chipLN = tk.Label(chipF, text=self.get_list_display(list_name), bg=bg, fg=colors.selectfg,
-                               font=('Calibri', 9), padx=4)
+                               font=('Calibri', 9), padx=4, cursor='fleur')
             chipLN.pack(side='left')
-            chipF.bind('<Button-1>', lambda e, rid=rowid, ln=list_name, cur=checked: self._toggle(rid, ln, cur))
-            chipL.bind('<Button-1>', lambda e, rid=rowid, ln=list_name, cur=checked: self._toggle(rid, ln, cur))
+
+            # Dragging the chip's text (not the checkmark, same reasoning
+            # as the timeline blocks) down onto the timeline converts this
+            # all-day task into a timed block.
+            for w in (chipL, chipLN):
+                w.bind('<ButtonPress-1>', lambda e, rid=rowid, ln=list_name: self._drag_start_allday(e, rid, ln))
+                w.bind('<B1-Motion>', self._drag_motion)
+                w.bind('<ButtonRelease-1>', self._drag_release)
+
             self._allday_widgets.append(chipF)
 
     def _draw_timeline_grid(self):
@@ -311,6 +357,55 @@ class WeekView(Frame):
                 self.timeline_canvas.create_text(TIMELINE_LABEL_WIDTH - 6, y + 2, text=_format_hour_label(hour),
                                                   anchor='ne', fill=colors.fg, font=('Calibri', 9), tags='gridline')
 
+    @staticmethod
+    def _layout_timed_blocks(timed_results):
+        """Assigns each timed task an (x_offset, width) within the block
+        column so tasks whose time ranges overlap render side-by-side
+        instead of stacking on top of each other (standard calendar-style
+        interval layout). Returns
+        [(row, list_name, start_min, duration_min, x_offset, width), ...]."""
+        parsed = []
+        for row, list_name in timed_results:
+            sched_start, sched_duration = row[-2], row[-1]
+            try:
+                hour = int(sched_start[:2])
+                minute = int(sched_start[2:])
+                duration = int(sched_duration)
+            except (ValueError, TypeError):
+                continue
+            parsed.append((row, list_name, hour * 60 + minute, duration))
+        parsed.sort(key=lambda p: p[2])
+
+        results = []
+        cluster = []      # (row, list_name, start_min, duration, column)
+        columns_end = []  # end time (minutes) of the block currently in each column
+
+        def flush():
+            if not cluster:
+                return
+            width = TIMELINE_BLOCK_WIDTH / len(columns_end)
+            for row, list_name, start_min, duration, col in cluster:
+                results.append((row, list_name, start_min, duration, col * width, width))
+            cluster.clear()
+            columns_end.clear()
+
+        for row, list_name, start_min, duration in parsed:
+            if columns_end and start_min >= max(columns_end):
+                flush()
+            end_min = start_min + duration
+            placed_col = None
+            for i, col_end in enumerate(columns_end):
+                if col_end <= start_min:
+                    columns_end[i] = end_min
+                    placed_col = i
+                    break
+            if placed_col is None:
+                columns_end.append(end_min)
+                placed_col = len(columns_end) - 1
+            cluster.append((row, list_name, start_min, duration, placed_col))
+        flush()
+        return results
+
     def _render_timeline(self, timed_results):
         for w in self._timeline_blocks:
             w.destroy()
@@ -318,32 +413,343 @@ class WeekView(Frame):
         self.timeline_canvas.delete('block')
 
         colors = BSStyle().colors
-        for row, list_name in timed_results:
+        for row, list_name, start_min, duration_minutes, x_offset, width in self._layout_timed_blocks(timed_results):
             rowid, task, checked, starred = row[0], row[1], row[2], row[3]
-            sched_start, sched_duration = row[-2], row[-1]
-            try:
-                hour = int(sched_start[:2])
-                minute = int(sched_start[2:])
-                duration_minutes = int(sched_duration)
-            except (ValueError, TypeError):
-                continue
-            y = hour * HOUR_HEIGHT_PX + minute
+            y = start_min
             height = max(duration_minutes, 18)
 
             bg = colors.success if checked == 'checked' else (colors.info if starred == 'y' else colors.primary)
             blockF = tk.Frame(self.timeline_canvas, bg=bg, highlightthickness=1, highlightbackground=colors.bg)
+
+            check_glyph = '✓' if checked == 'checked' else '○'
+            checkL = tk.Label(blockF, text=check_glyph, bg=bg, fg=colors.selectfg, font=('Calibri', 11, 'bold'),
+                               cursor='hand2')
+            checkL.pack(side='left', padx=(4, 2), pady=2)
+            checkL.bind('<Button-1>', lambda e, rid=rowid, ln=list_name, cur=checked: self._toggle(rid, ln, cur))
+            checkL.bind('<Button-3>', lambda e, rid=rowid, ln=list_name, r=row: self._open_block_menu(e, rid, ln, r))
+
+            textF = tk.Frame(blockF, bg=bg)
+            textF.pack(side='left', fill='both', expand=True)
             font = ('Calibri', 11, 'overstrike') if checked == 'checked' else ('Calibri', 11, 'bold')
             text = task + ('  ★' if starred == 'y' else '')
-            tk.Label(blockF, text=text, bg=bg, fg=colors.selectfg, font=font,
-                     anchor='w', justify='left').pack(fill='x', padx=6, pady=(2, 0))
-            tk.Label(blockF, text=self.get_list_display(list_name), bg=bg, fg=colors.selectfg,
-                     font=('Calibri', 9), anchor='w').pack(fill='x', padx=6)
-            blockF.bind('<Button-1>', lambda e, rid=rowid, ln=list_name, cur=checked: self._toggle(rid, ln, cur))
+            textL1 = tk.Label(textF, text=text, bg=bg, fg=colors.selectfg, font=font,
+                               anchor='w', justify='left', cursor='fleur')
+            textL1.pack(fill='x', padx=2, pady=(2, 0))
+            textL2 = tk.Label(textF, text=self.get_list_display(list_name), bg=bg, fg=colors.selectfg,
+                               font=('Calibri', 9), anchor='w', cursor='fleur')
+            textL2.pack(fill='x', padx=2)
 
-            self.timeline_canvas.create_window(TIMELINE_LABEL_WIDTH + 4, y, window=blockF,
-                                                width=TIMELINE_BLOCK_WIDTH - 8, height=height,
-                                                anchor='nw', tags='block')
+            item_id = self.timeline_canvas.create_window(TIMELINE_LABEL_WIDTH + 4 + x_offset, y, window=blockF,
+                                                           width=max(width - 8, 20), height=height,
+                                                           anchor='nw', tags='block')
+
+            # Drag-to-reschedule and the right-click menu are bound on the
+            # text surface (frame + both labels) -- deliberately not on
+            # checkL, which already owns plain <Button-1> for toggling,
+            # so the two gestures can never fight over the same click.
+            for w in (textF, textL1, textL2):
+                w.bind('<ButtonPress-1>', lambda e, iid=item_id, rid=rowid, ln=list_name, dur=duration_minutes:
+                       self._drag_start_timeline(e, iid, rid, ln, dur))
+                w.bind('<B1-Motion>', self._drag_motion)
+                w.bind('<ButtonRelease-1>', self._drag_release)
+                w.bind('<Button-3>', lambda e, rid=rowid, ln=list_name, r=row: self._open_block_menu(e, rid, ln, r))
+
+            # Every block widget also needs its own wheel/touchpad binding
+            # -- see the note by self.timeline_canvas's own binds in
+            # __init__ for why the canvas's binding alone isn't enough.
+            for w in (blockF, checkL, textF, textL1, textL2):
+                w.bind('<MouseWheel>', self._on_timeline_scroll)
+                if wheel.has_touchpad_scroll():
+                    w.bind(wheel.TOUCHPAD_SCROLL, self._on_timeline_touchpad_scroll)
+
             self._timeline_blocks.append(blockF)
+
+    # ------------------------------------------------------------------
+    # Timeline scrolling
+    def _on_timeline_scroll(self, event):
+        self.timeline_canvas.yview_scroll(int(-1 * event.delta), 'units')
+
+    def _on_timeline_touchpad_scroll(self, event):
+        # yscrollincrement=1 on this canvas, so a precise pixel delta maps
+        # directly to a 'units' scroll amount with no accumulation needed.
+        _, dy = wheel.precise_deltas(event)
+        if dy:
+            self.timeline_canvas.yview_scroll(-dy, 'units')
+
+    # ------------------------------------------------------------------
+    # Drag-to-reschedule. Two entry points feed one shared state machine:
+    #   - _drag_start_timeline: dragging an existing timed block. Moves
+    #     schedule_start (snapped to DRAG_SNAP_MIN), duration stays fixed,
+    #     so the block moves as one unit.
+    #   - _drag_start_allday: dragging an all-day chip. Nothing moves in
+    #     place (there's no timeline position yet); a floating ghost
+    #     follows the cursor, and dropping it over the timeline schedules
+    #     the task as a new DEFAULT_TIMED_DURATION_MIN-long block there.
+    # Dropping a timeline-sourced drag above the canvas (in/near the
+    # all-day row) converts it back to all-day. Near the top/bottom edges
+    # of the visible canvas, the view auto-scrolls for as long as the
+    # cursor stays there; reaching the very top of the day (nothing left
+    # to scroll) is what lets the cursor "escape" upward into the all-day
+    # row to drop there.
+    def _drag_start_timeline(self, event, item_id, rowid, list_name, duration_minutes):
+        orig_x, orig_y = self.timeline_canvas.coords(item_id)
+        canvas_top = self.timeline_canvas.winfo_rooty()
+        mouse_y_in_canvas = self.timeline_canvas.canvasy(0) + (event.y_root - canvas_top)
+        self._drag = {
+            'source': 'timeline', 'item_id': item_id, 'rowid': rowid, 'list_name': list_name,
+            'duration': duration_minutes, 'orig_x': orig_x, 'grab_offset': mouse_y_in_canvas - orig_y,
+            'new_y': orig_y, 'moved': False, 'tooltip': None, 'ghost': None,
+            'start_y_root': event.y_root, 'autoscroll_dir': 0, 'autoscroll_job': None,
+        }
+
+    def _drag_start_allday(self, event, rowid, list_name):
+        colors = BSStyle().colors
+        ghost = tk.Toplevel(self)
+        ghost.overrideredirect(True)
+        ghost.attributes('-topmost', True)
+        tk.Label(ghost, text='Drop on timeline to schedule (1 hr)', bg=colors.info, fg=colors.selectfg,
+                 font=('Calibri', 10, 'bold'), padx=8, pady=4).pack()
+        ghost.geometry('+{}+{}'.format(event.x_root + 12, event.y_root + 12))
+        self._drag = {
+            'source': 'allday', 'item_id': None, 'rowid': rowid, 'list_name': list_name,
+            'duration': DEFAULT_TIMED_DURATION_MIN, 'orig_x': None, 'grab_offset': DEFAULT_TIMED_DURATION_MIN / 2,
+            'new_y': None, 'moved': False, 'tooltip': None, 'ghost': ghost,
+            'start_y_root': event.y_root, 'autoscroll_dir': 0, 'autoscroll_job': None,
+        }
+
+    def _point_over_timeline(self, event):
+        x0 = self.timeline_canvas.winfo_rootx()
+        y0 = self.timeline_canvas.winfo_rooty()
+        return (x0 <= event.x_root <= x0 + self.timeline_canvas.winfo_width()
+                and y0 <= event.y_root <= y0 + self.timeline_canvas.winfo_height())
+
+    def _drag_motion(self, event):
+        d = self._drag
+        if d is None:
+            return
+        self._last_drag_event = event
+        if not d['moved'] and abs(event.y_root - d['start_y_root']) < 4:
+            return
+        d['moved'] = True
+
+        if d['source'] == 'allday':
+            d['ghost'].geometry('+{}+{}'.format(event.x_root + 12, event.y_root + 12))
+
+        if self._point_over_timeline(event):
+            self._drag_update_canvas_position(event)
+        elif d['tooltip'] is not None:
+            d['tooltip'].destroy()
+            d['tooltip'] = None
+
+        self._update_edge_autoscroll(event)
+
+    def _drag_update_canvas_position(self, event):
+        d = self._drag
+        canvas_top = self.timeline_canvas.winfo_rooty()
+        mouse_y_in_canvas = self.timeline_canvas.canvasy(0) + (event.y_root - canvas_top)
+        raw_y = mouse_y_in_canvas - d['grab_offset']
+        max_y = 24 * HOUR_HEIGHT_PX - d['duration']
+        snapped_y = max(0, min(round(raw_y / DRAG_SNAP_MIN) * DRAG_SNAP_MIN, max_y))
+        d['new_y'] = snapped_y
+        if d['source'] == 'timeline':
+            self.timeline_canvas.coords(d['item_id'], d['orig_x'], snapped_y)
+        self._update_drag_tooltip(event, snapped_y, d['duration'])
+
+    def _update_edge_autoscroll(self, event):
+        d = self._drag
+        canvas_top = self.timeline_canvas.winfo_rooty()
+        canvas_bottom = canvas_top + self.timeline_canvas.winfo_height()
+        if event.y_root > canvas_bottom - AUTOSCROLL_MARGIN_PX and self._point_over_timeline(event):
+            d['autoscroll_dir'] = 1
+        elif (event.y_root < canvas_top + AUTOSCROLL_MARGIN_PX and self.timeline_canvas.canvasy(0) > 0
+              and event.x_root >= self.timeline_canvas.winfo_rootx()):
+            d['autoscroll_dir'] = -1
+        else:
+            d['autoscroll_dir'] = 0
+        if d['autoscroll_dir'] != 0 and d['autoscroll_job'] is None:
+            d['autoscroll_job'] = self.after(AUTOSCROLL_INTERVAL_MS, self._autoscroll_tick)
+
+    def _autoscroll_tick(self):
+        d = self._drag
+        if d is None:
+            return
+        d['autoscroll_job'] = None
+        if d['autoscroll_dir'] == 0:
+            return
+        self.timeline_canvas.yview_scroll(d['autoscroll_dir'] * AUTOSCROLL_STEP_UNITS, 'units')
+        if d['autoscroll_dir'] == -1 and self.timeline_canvas.canvasy(0) <= 0:
+            d['autoscroll_dir'] = 0  # hit the top of the day -- nothing left to scroll, cursor is free
+        if self._last_drag_event is not None:
+            self._drag_update_canvas_position(self._last_drag_event)
+        if d['autoscroll_dir'] != 0:
+            d['autoscroll_job'] = self.after(AUTOSCROLL_INTERVAL_MS, self._autoscroll_tick)
+
+    def _update_drag_tooltip(self, event, start_min, duration_minutes):
+        d = self._drag
+        if d['tooltip'] is None:
+            tip = tk.Toplevel(self)
+            tip.overrideredirect(True)
+            tip.attributes('-topmost', True)
+            colors = BSStyle().colors
+            lbl = tk.Label(tip, font=('Calibri', 11, 'bold'), padx=8, pady=4,
+                            bg=colors.info, fg=colors.selectfg)
+            lbl.pack()
+            d['tooltip'] = tip
+            d['tooltip_label'] = lbl
+        text = '{} – {}'.format(_format_clock(start_min), _format_clock(start_min + duration_minutes))
+        d['tooltip_label'].config(text=text)
+        d['tooltip'].geometry('+{}+{}'.format(event.x_root + 16, event.y_root + 12))
+
+    def _drag_release(self, event):
+        d = self._drag
+        if d is None:
+            return
+        self._last_drag_event = None
+        if d['autoscroll_job'] is not None:
+            self.after_cancel(d['autoscroll_job'])
+        if d['tooltip'] is not None:
+            d['tooltip'].destroy()
+        if d['ghost'] is not None:
+            d['ghost'].destroy()
+
+        if d['moved']:
+            over_timeline = self._point_over_timeline(event)
+            above_timeline = event.y_root < self.timeline_canvas.winfo_rooty()
+            if over_timeline:
+                start_min = int(d['new_y'])
+                hour, minute = divmod(start_min, 60)
+                new_start = '{:02d}{:02d}'.format(hour, minute)
+                if d['source'] == 'timeline':
+                    self._reschedule_task(d['rowid'], d['list_name'], new_start)
+                else:  # all-day chip dropped onto the timeline -> becomes a new timed block
+                    self._schedule_task(d['rowid'], d['list_name'], self.selected_date.strftime('%x'),
+                                         new_start, str(d['duration']))
+            elif above_timeline and d['source'] == 'timeline':
+                # dragged an existing timed block up past the (already
+                # scrolled-to-top) timeline into the all-day row
+                self._schedule_task(d['rowid'], d['list_name'], self.selected_date.strftime('%x'), '', '')
+            elif d['source'] == 'timeline':
+                # dropped somewhere else entirely -- cancel, re-render to
+                # snap the live-dragged position back to the real DB state
+                self._render_schedule()
+            # an all-day-sourced drag dropped anywhere else (e.g. back on
+            # the all-day row) never touched the DB or the real chip
+            # widget (only the ghost moved), so there's nothing to undo
+
+        self._drag = None
+
+    def _reschedule_task(self, rowid, list_name, new_start):
+        conn = sqlite3.connect('info.db')
+        c = conn.cursor()
+        c.execute("UPDATE '{}' SET schedule_start=? WHERE rowid=?".format(list_name), (new_start, rowid))
+        conn.commit()
+        conn.close()
+        self._render_schedule()
+        if self.on_task_toggle:
+            self.on_task_toggle()
+
+    # ------------------------------------------------------------------
+    # Right-click quick-actions menu (mirrors main.py's expand_3_dots:
+    # a plain, cursor-positioned Frame of buttons with a 5s auto-dismiss)
+    def _open_block_menu(self, event, rowid, list_name, row):
+        checked, starred = row[2], row[3]
+        colors = BSStyle().colors
+        menuF = tk.Frame(self, bg=colors.dark, highlightthickness=1, highlightbackground=colors.secondary)
+        menuF.place(x=event.x_root - self.winfo_rootx(), y=event.y_root - self.winfo_rooty())
+
+        def close_menu():
+            menuF.destroy()
+
+        def action(fn):
+            return lambda: (fn(), close_menu())
+
+        def make_btn(text, fn):
+            Button(menuF, text=text, bootstyle='info outline', command=action(fn)).pack(fill='x', pady=2, padx=2)
+
+        make_btn('✔ Check / Uncheck', lambda: self._toggle(rowid, list_name, checked))
+        make_btn('⭐ Star / Unstar', lambda: self._toggle_star(rowid, list_name, starred))
+        make_btn('🕐 Change time...', lambda: self._open_change_time_popup(rowid, list_name, row))
+        make_btn('🗓 Remove from My Day', lambda: self._schedule_task(rowid, list_name, '', '', ''))
+        make_btn('🖊 Rename task', lambda: self._open_rename_popup(rowid, list_name, row[1]))
+        make_btn('🗑 Delete task', lambda: self._delete_task(rowid, list_name))
+        make_btn('💬 Open full task view', lambda: self._open_full_task_view(rowid, list_name))
+
+        menuF.after(5000, close_menu)
+
+    def _toggle_star(self, rowid, list_name, current_star):
+        new_star = 'n' if current_star == 'y' else 'y'
+        conn = sqlite3.connect('info.db')
+        c = conn.cursor()
+        c.execute("UPDATE '{}' SET starred=? WHERE rowid=?".format(list_name), (new_star, rowid))
+        conn.commit()
+        conn.close()
+        self._render_schedule()
+        if self.on_task_toggle:
+            self.on_task_toggle()
+
+    def _delete_task(self, rowid, list_name):
+        conn = sqlite3.connect('info.db')
+        c = conn.cursor()
+        c.execute("DELETE FROM '{}' WHERE rowid=?".format(list_name), (rowid,))
+        conn.commit()
+        conn.close()
+        self._render_schedule()
+        if self.on_task_toggle:
+            self.on_task_toggle()
+
+    def _rename_task(self, rowid, list_name, new_name):
+        new_name = new_name.strip()
+        if not new_name:
+            return
+        conn = sqlite3.connect('info.db')
+        c = conn.cursor()
+        c.execute("UPDATE '{}' SET task=? WHERE rowid=?".format(list_name), (new_name, rowid))
+        conn.commit()
+        conn.close()
+        self._render_schedule()
+
+    def _open_rename_popup(self, rowid, list_name, current_name):
+        popup = tk.Toplevel(self)
+        popup.title('Rename task')
+        popup.geometry('300x130')
+        tk.Label(popup, text='New name:').pack(pady=(12, 2))
+        nameE = tk.Entry(popup, width=30)
+        nameE.insert(0, current_name)
+        nameE.pack(pady=2)
+
+        def save():
+            self._rename_task(rowid, list_name, nameE.get())
+            popup.destroy()
+
+        tk.Button(popup, text='Save', command=save).pack(pady=12)
+
+    def _open_change_time_popup(self, rowid, list_name, row):
+        sched_date, sched_start, sched_duration = row[-3], row[-2], row[-1]
+        popup = tk.Toplevel(self)
+        popup.title('Change time')
+        popup.geometry('280x260')
+        tk.Label(popup, text='Date (MM/DD/YY):').pack(pady=(12, 2))
+        dateE = tk.Entry(popup)
+        dateE.insert(0, sched_date or self.selected_date.strftime('%x'))
+        dateE.pack()
+        tk.Label(popup, text='Start (HHMM, optional):').pack(pady=(12, 2))
+        startE = tk.Entry(popup)
+        startE.insert(0, sched_start or '')
+        startE.pack()
+        tk.Label(popup, text='Duration (mins, optional):').pack(pady=(12, 2))
+        durE = tk.Entry(popup)
+        durE.insert(0, sched_duration or '')
+        durE.pack()
+
+        def save():
+            self._schedule_task(rowid, list_name, dateE.get().strip(), startE.get().strip(), durE.get().strip())
+            popup.destroy()
+
+        tk.Button(popup, text='Save', command=save).pack(pady=14)
+
+    def _open_full_task_view(self, rowid, list_name):
+        if self.open_task_detail:
+            self.open_task_detail(rowid, list_name)
 
     # ------------------------------------------------------------------
     # Suggestions overlay
@@ -444,3 +850,16 @@ def _format_hour_label(hour):
     if display_hour == 0:
         display_hour = 12
     return '{} {}'.format(display_hour, suffix)
+
+
+def _format_clock(total_minutes):
+    """Formats a minutes-since-midnight value (may exceed 1439 if a drag
+    is snapped near the end of the day) as e.g. '9:45 AM'."""
+    total_minutes = max(0, int(total_minutes))
+    hour, minute = divmod(total_minutes, 60)
+    hour %= 24
+    suffix = 'AM' if hour < 12 else 'PM'
+    display_hour = hour % 12
+    if display_hour == 0:
+        display_hour = 12
+    return '{}:{:02d} {}'.format(display_hour, minute, suffix)

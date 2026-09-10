@@ -20,6 +20,7 @@ Changes in this version:
 import math
 import tkinter as tk
 from ttkbootstrap import Frame, Scrollbar, Label
+from ttkbootstrap.internal import wheel
 
 PIN_WIDTH = 240
 PIN_HEIGHT = 140
@@ -42,7 +43,8 @@ class FreeformCorkboard(Frame):
         self.canvas = tk.Canvas(self, highlightthickness=0, background='#222222')
         self.vbar = Scrollbar(self, orient='vertical', command=self._yview)
         self.hbar = Scrollbar(self, orient='horizontal', command=self._xview)
-        self.canvas.configure(yscrollcommand=self.vbar.set, xscrollcommand=self.hbar.set)
+        self.canvas.configure(yscrollcommand=self.vbar.set, xscrollcommand=self.hbar.set,
+                               xscrollincrement=1, yscrollincrement=1)
 
         self.canvas.grid(row=0, column=0, sticky='nsew')
         self.vbar.grid(row=0, column=1, sticky='ns')
@@ -59,6 +61,7 @@ class FreeformCorkboard(Frame):
         self._suppress_click = set()  # rowids whose next release shouldn't open the pin
 
         self.canvas.bind('<Configure>', lambda e: self._recompute_board_bounds())
+        self._bind_scroll(self.canvas)
 
     def suppress_click(self, rowid):
         """
@@ -146,6 +149,7 @@ class FreeformCorkboard(Frame):
                              'on_click': on_click}
 
         self._bind_drag(frame, rowid)
+        self._bind_scroll(frame)
         self._recompute_board_bounds()
         return frame, x, y
 
@@ -161,6 +165,47 @@ class FreeformCorkboard(Frame):
         widget.bind('<ButtonRelease-1>', lambda e: self._on_release(e, rowid))
         for child in widget.winfo_children():
             self._bind_drag(child, rowid)
+
+    def _bind_scroll(self, widget):
+        """Binds two-finger/wheel scrolling on `widget` and every current
+        descendant, recursively -- same reasoning as _bind_drag: each pin
+        is a genuine embedded child window (create_window), so a binding
+        on the canvas alone doesn't fire once the pointer is over a pin's
+        content, only over open canvas background.
+
+        Both <MouseWheel>/<Shift-MouseWheel> AND <TouchpadScroll> are
+        bound: on Tk 9 (this app's Tk), every trackpad/Magic Mouse/Magic
+        Trackpad fires ONLY <TouchpadScroll>, never <MouseWheel> at all,
+        so a fix covering only the classic wheel event would be invisible
+        to real two-finger gestures despite working in any test that only
+        synthesizes <MouseWheel>-shaped events."""
+        widget.bind('<MouseWheel>', self._on_wheel_scroll)
+        widget.bind('<Shift-MouseWheel>', self._on_wheel_scroll_horizontal)
+        if wheel.has_touchpad_scroll():
+            widget.bind(wheel.TOUCHPAD_SCROLL, self._on_touchpad_scroll)
+        for child in widget.winfo_children():
+            self._bind_scroll(child)
+
+    def _on_wheel_scroll(self, event):
+        self.canvas.yview_scroll(int(-1 * event.delta), 'units')
+        self._update_edge_arrows()
+
+    def _on_wheel_scroll_horizontal(self, event):
+        self.canvas.xview_scroll(int(-1 * event.delta), 'units')
+        self._update_edge_arrows()
+
+    def _on_touchpad_scroll(self, event):
+        # xscrollincrement/yscrollincrement=1 on this canvas, so precise
+        # pixel deltas map directly to a 'units' scroll amount with no
+        # accumulation needed. Both axes scroll together, matching a
+        # natural two-finger pan across the freeform board.
+        dx, dy = wheel.precise_deltas(event)
+        if dx:
+            self.canvas.xview_scroll(-dx, 'units')
+        if dy:
+            self.canvas.yview_scroll(-dy, 'units')
+        if dx or dy:
+            self._update_edge_arrows()
 
     def _on_press(self, event, rowid):
         pin = self.pins[rowid]
