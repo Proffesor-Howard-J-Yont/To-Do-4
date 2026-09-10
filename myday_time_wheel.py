@@ -22,6 +22,7 @@ destroyed/recreated on scroll -- only re-labeled.
 """
 
 import re
+import time
 import tkinter as tk
 from datetime import date
 from ttkbootstrap import DateEntry, Frame, Label, Button, Separator
@@ -34,6 +35,8 @@ ITEM_HEIGHT_PX = 32
 WHEEL_WIDTH_PX = 90
 TOTAL_ITEMS = 48
 DRAG_SNAP_MIN = 15
+ANIMATION_DURATION_MS = 130  # scroll/click/typed-confirm glide length; not physically accurate, just smooth
+ANIMATION_TICK_MS = 16  # ~60fps
 
 _HOURS_ORDER = [12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 _MINUTES = [0, 15, 30, 45]
@@ -155,6 +158,8 @@ class TimeWheel(tk.Frame):
         self._entry = None
         self._entry_var = None
         self._pixel_accum = wheel.PixelAccumulator()
+        self._anim_job = None
+        self._anim_state = None
 
         self.canvas = tk.Canvas(self, width=WHEEL_WIDTH_PX, height=VISIBLE_ROWS * ITEM_HEIGHT_PX,
                                  highlightthickness=0, bg=colors.bg)
@@ -200,9 +205,90 @@ class TimeWheel(tk.Frame):
             self.on_change(self.selected_index)
 
     def _step(self, direction):
-        self.selected_index = (self.selected_index + direction) % TOTAL_ITEMS
-        self._redraw()
+        new_index = (self.selected_index + direction) % TOTAL_ITEMS
+        self._transition_to(new_index, direction)
+
+    def _transition_to(self, target_index, direction):
+        """Animates the 5 visible rows gliding to target_index (a short
+        tween, not physically accurate) instead of just retexturing in
+        place -- covers scroll notches, row clicks (which can jump ±2),
+        and confirmed typed input alike. `direction`'s sign picks which
+        way the glide visually moves; its magnitude doesn't matter here.
+
+        Any in-flight animation is settled (not queued, not blended)
+        before starting the new one -- rapid successive input always
+        shows one clean glide to the latest target rather than stacked
+        .after() calls fighting each other."""
+        self._settle_animation()
+
+        if target_index == self.selected_index:
+            return
+
+        self.selected_index = target_index
         self._fire_change()
+
+        colors = BSStyle().colors
+        sign = -1 if direction > 0 else 1
+        incoming_ids = []
+        for row in range(VISIBLE_ROWS):
+            idx = (target_index + (row - CENTER_ROW)) % TOTAL_ITEMS
+            base_y = row * ITEM_HEIGHT_PX + ITEM_HEIGHT_PX // 2
+            font = ('Calibri', 15, 'bold') if row == CENTER_ROW else ('Calibri', 12)
+            fill = colors.fg if row == CENTER_ROW else colors.secondary
+            # Pre-positioned one item-height away (the direction we're
+            # animating from) -- this is exactly where the ordinary
+            # _redraw() would leave things, so at 100% progress it lines
+            # up perfectly with no separate crossfade needed.
+            item_id = self.canvas.create_text(WHEEL_WIDTH_PX // 2, base_y - sign * ITEM_HEIGHT_PX,
+                                               text=TIME_LABELS[idx], font=font, fill=fill)
+            incoming_ids.append(item_id)
+
+        self._anim_state = {'incoming_ids': incoming_ids, 'sign': sign, 'start_time': None}
+        self._animate_tick()
+
+    def _animate_tick(self):
+        if self._anim_state is None:
+            return
+        now = time.monotonic()
+        if self._anim_state['start_time'] is None:
+            self._anim_state['start_time'] = now
+        elapsed_ms = (now - self._anim_state['start_time']) * 1000
+        progress = min(1.0, elapsed_ms / ANIMATION_DURATION_MS)
+        eased = 1 - (1 - progress) ** 2  # quadratic ease-out
+
+        sign = self._anim_state['sign']
+        old_offset = sign * ITEM_HEIGHT_PX * eased
+        incoming_offset = -sign * ITEM_HEIGHT_PX * (1 - eased)
+
+        for row in range(VISIBLE_ROWS):
+            base_y = row * ITEM_HEIGHT_PX + ITEM_HEIGHT_PX // 2
+            self.canvas.coords(self._row_ids[row], WHEEL_WIDTH_PX // 2, base_y + old_offset)
+            self.canvas.coords(self._anim_state['incoming_ids'][row], WHEEL_WIDTH_PX // 2, base_y + incoming_offset)
+
+        if progress >= 1.0:
+            self._settle_animation()
+        else:
+            self._anim_job = self.after(ANIMATION_TICK_MS, self._animate_tick)
+
+    def _settle_animation(self):
+        """Cancels any in-flight glide (if called mid-animation) and
+        guarantees the widget ends up in a clean state: no stray
+        incoming items, rows back at their canonical resting position,
+        text matching the current selected_index. Safe to call whether
+        or not an animation is actually running -- this is both the
+        "finish" path (natural completion) and the "interrupt" path
+        (a new transition or entering type-mode cuts one off early)."""
+        if self._anim_job is not None:
+            self.after_cancel(self._anim_job)
+            self._anim_job = None
+        if self._anim_state is not None:
+            for item_id in self._anim_state['incoming_ids']:
+                self.canvas.delete(item_id)
+            self._anim_state = None
+        for row in range(VISIBLE_ROWS):
+            y = row * ITEM_HEIGHT_PX + ITEM_HEIGHT_PX // 2
+            self.canvas.coords(self._row_ids[row], WHEEL_WIDTH_PX // 2, y)
+        self._redraw()
 
     def _on_wheel_scroll(self, event):
         if self._typing:
@@ -228,6 +314,7 @@ class TimeWheel(tk.Frame):
     def _enter_type_mode(self, event=None):
         if self._typing:
             return
+        self._settle_animation()  # don't leave a glide running under the Entry
         self._typing = True
         colors = BSStyle().colors
         self._entry_var = tk.StringVar(value=TIME_LABELS[self.selected_index])
@@ -263,11 +350,15 @@ class TimeWheel(tk.Frame):
         if parsed is None:
             return  # invalid input -- silently keep the previous value
         hour12, minute, meridiem = parsed
-        self.selected_index = _hour12_minute_to_index(hour12, minute)
+        new_index = _hour12_minute_to_index(hour12, minute)
         if meridiem is not None and self.on_meridiem_hint is not None:
-            self.on_meridiem_hint(meridiem)  # before _redraw/_fire_change, so validation sees it
-        self._redraw()
-        self._fire_change()
+            self.on_meridiem_hint(meridiem)  # before _transition_to's _fire_change, so validation sees it
+        # Shortest-path direction for the glide -- a typed value can land
+        # anywhere on the wheel, unlike scroll/click's small, already-
+        # directional steps.
+        delta = (new_index - self.selected_index) % TOTAL_ITEMS
+        direction = 1 if delta <= TOTAL_ITEMS - delta else -1
+        self._transition_to(new_index, direction)
 
     def get_index(self):
         return self.selected_index
@@ -284,11 +375,13 @@ class TimeWheel(tk.Frame):
         return hour24, minute
 
     def set_index(self, index):
-        """Programmatic prefill/reset -- redraws immediately, does NOT
-        fire on_change (prefilling shouldn't trigger a validation pass
-        before the popup has finished wiring everything up)."""
+        """Programmatic prefill/reset -- always instant, never animated
+        (prefilling a popup shouldn't visibly "scroll" into place), and
+        does NOT fire on_change (prefilling shouldn't trigger a
+        validation pass before the popup has finished wiring everything
+        up). Also settles any stray in-flight animation defensively."""
         self.selected_index = index % TOTAL_ITEMS
-        self._redraw()
+        self._settle_animation()
 
 
 class AmPmToggle(tk.Frame):
