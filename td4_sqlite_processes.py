@@ -89,6 +89,30 @@ def migrate_task_schedule_columns():
                     continue
     conn.commit()
 
+def migrate_task_block_color_column():
+    """Adds block_color to every task table -- an optional custom hex
+    color for how a task's My Day timeline block/all-day banner renders,
+    independent of schedule/due-date columns. Null/empty means "use the
+    default checked/starred/primary coloring". Safe to call every
+    startup -- no-ops once present."""
+    c.execute("SELECT * FROM sqlite_master WHERE type='table'")
+    all_tables = c.fetchall()
+    for table in all_tables:
+        table_name = table[1]
+        if table_name == 'sqlite_sequence':
+            continue
+        try:
+            c.execute("PRAGMA table_info('{}')".format(table_name))
+            existing_cols = [col[1] for col in c.fetchall()]
+        except sqlite3.OperationalError:
+            continue
+        if 'block_color' not in existing_cols:
+            try:
+                c.execute("ALTER TABLE '{}' ADD COLUMN block_color TEXT".format(table_name))
+            except sqlite3.OperationalError:
+                continue
+    conn.commit()
+
 def ensure_setting(initials, default_yn):
     """Insert a Settings row with a default value if one doesn't already
     exist for this key. Safe to call every startup."""
@@ -150,7 +174,7 @@ def add_list(displayname):
         r10l_result = ''.join(creepy_hidden_nameL)
         c_user000.execute('''INSERT INTO list_names VALUES ('{}','{}','{}','{}','{}')'''.format(newdisplayname1, r10l_result, 'This list is not in a stack.', 'Standard', 'Medium'))
         conn_user000.commit()
-        c.execute("""CREATE TABLE '{}' (task text, checked text, starred text, difficulty text, duedateday text, duedatetime text, duedateonoff text, amiaministep text, whichminiami text, importance text, notes text, schedule_date text, schedule_start text, schedule_duration text)""".format(r10l_result))
+        c.execute("""CREATE TABLE '{}' (task text, checked text, starred text, difficulty text, duedateday text, duedatetime text, duedateonoff text, amiaministep text, whichminiami text, importance text, notes text, schedule_date text, schedule_start text, schedule_duration text, block_color text)""".format(r10l_result))
         conn.commit()
         return ['List has been created successfully.', r10l_result]
     else:

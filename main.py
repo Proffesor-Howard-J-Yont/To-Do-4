@@ -18,8 +18,10 @@ from corkboard_freeform import FreeformCorkboard, PIN_WIDTH, PIN_HEIGHT
 import json
 from corkboard_rich_text import build_pin_preview, open_pin_view, open_pin_editor, delete_image_file
 from myday_weekview import WeekView
+import myday_time_wheel
 sql_process.migrate_corkboard_content()
 sql_process.migrate_task_schedule_columns()
+sql_process.migrate_task_block_color_column()
 sql_process.ensure_setting('sl_myday', 'y')
 
 #  COLORS
@@ -1502,6 +1504,7 @@ class display_task:
         self.schedule_date = (item[12] if len(item) > 12 else '') or ''
         self.schedule_start = (item[13] if len(item) > 13 else '') or ''
         self.schedule_duration = (item[14] if len(item) > 14 else '') or ''
+        self.block_color = (item[15] if len(item) > 15 else '') or ''
 
         if self.amiaministep == 'no':
             numotasks += 1
@@ -1766,7 +1769,7 @@ class display_task:
         global currentlistname
         conn = sqlite3.connect('info.db')
         c = conn.cursor()
-        c.execute("INSERT INTO '{}' (task, checked, starred, difficulty, duedateday, duedatetime, duedateonoff, amiaministep, whichminiami, importance, notes, schedule_date, schedule_start, schedule_duration) VALUES (:words, :checked, :starred, :difficulty, :duedateday, :duedatetime, :duedateonoff, :amiaministep, :whichminiami, :importance, :notes, :schedule_date, :schedule_start, :schedule_duration)".format(self.switchtolist.get()), {'words':self.name, 'checked':self.status, 'starred':self.star, 'difficulty':self.difficulty, 'duedateday':self.duedateday, 'duedatetime':self.duedatetime, 'duedateonoff':self.duedateonoff, 'amiaministep':self.amiaministep, 'whichminiami':self.whichminiami, 'importance':self.importance, 'notes':self.notes, 'schedule_date':self.schedule_date, 'schedule_start':self.schedule_start, 'schedule_duration':self.schedule_duration})
+        c.execute("INSERT INTO '{}' (task, checked, starred, difficulty, duedateday, duedatetime, duedateonoff, amiaministep, whichminiami, importance, notes, schedule_date, schedule_start, schedule_duration, block_color) VALUES (:words, :checked, :starred, :difficulty, :duedateday, :duedatetime, :duedateonoff, :amiaministep, :whichminiami, :importance, :notes, :schedule_date, :schedule_start, :schedule_duration, :block_color)".format(self.switchtolist.get()), {'words':self.name, 'checked':self.status, 'starred':self.star, 'difficulty':self.difficulty, 'duedateday':self.duedateday, 'duedatetime':self.duedatetime, 'duedateonoff':self.duedateonoff, 'amiaministep':self.amiaministep, 'whichminiami':self.whichminiami, 'importance':self.importance, 'notes':self.notes, 'schedule_date':self.schedule_date, 'schedule_start':self.schedule_start, 'schedule_duration':self.schedule_duration, 'block_color':self.block_color})
 
         c.execute("DELETE from '{}' WHERE rowid='{}'".format(currentlistname, self.number))
         conn.commit()
@@ -1775,7 +1778,7 @@ class display_task:
         oidgrabber = c.fetchone()[0]
 
         for step in sql_process.get_ministeps(self.number, currentlistname):
-            c.execute("INSERT INTO '{}' (task, checked, starred, difficulty, duedateday, duedatetime, duedateonoff, amiaministep, whichminiami, importance, notes, schedule_date, schedule_start, schedule_duration) VALUES (:words, :checked, :starred, :difficulty, :duedateday, :duedatetime, :duedateonoff, :amiaministep, :whichminiami, :importance, :notes, :schedule_date, :schedule_start, :schedule_duration)".format(self.switchtolist.get()), {'words':step[1], 'checked':step[2], 'starred':step[3], 'difficulty':step[4], 'duedateday':step[5], 'duedatetime':step[6], 'duedateonoff':step[7], 'amiaministep':step[8], 'whichminiami':oidgrabber, 'importance':step[10], 'notes':step[11], 'schedule_date':step[12] if len(step) > 12 else '', 'schedule_start':step[13] if len(step) > 13 else '', 'schedule_duration':step[14] if len(step) > 14 else ''})
+            c.execute("INSERT INTO '{}' (task, checked, starred, difficulty, duedateday, duedatetime, duedateonoff, amiaministep, whichminiami, importance, notes, schedule_date, schedule_start, schedule_duration, block_color) VALUES (:words, :checked, :starred, :difficulty, :duedateday, :duedatetime, :duedateonoff, :amiaministep, :whichminiami, :importance, :notes, :schedule_date, :schedule_start, :schedule_duration, :block_color)".format(self.switchtolist.get()), {'words':step[1], 'checked':step[2], 'starred':step[3], 'difficulty':step[4], 'duedateday':step[5], 'duedatetime':step[6], 'duedateonoff':step[7], 'amiaministep':step[8], 'whichminiami':oidgrabber, 'importance':step[10], 'notes':step[11], 'schedule_date':step[12] if len(step) > 12 else '', 'schedule_start':step[13] if len(step) > 13 else '', 'schedule_duration':step[14] if len(step) > 14 else '', 'block_color':step[15] if len(step) > 15 else ''})
 
         c.execute("DELETE from '{}' WHERE whichminiami='{}'".format(currentlistname, self.number))
         conn.commit()
@@ -1819,13 +1822,13 @@ class display_task:
         c = conn.cursor()
         c.execute("SELECT * from '{}' WHERE rowid='{}'".format(currentlistname, self.number))
         copygrabber = c.fetchone()
-        c.execute("INSERT INTO '{}' (task, checked, starred, difficulty, duedateday, duedatetime, duedateonoff, amiaministep, whichminiami, importance, notes, schedule_date, schedule_start, schedule_duration) VALUES (:words, :checked, :starred, :difficulty, :duedateday, :duedatetime, :duedateonoff, :amiaministep, :whichminiami, :importance, :notes, :schedule_date, :schedule_start, :schedule_duration)".format(self.switchtolistcopy.get()), {'words':self.name, 'checked':self.status, 'starred':self.star, 'difficulty':self.difficulty, 'duedateday':self.duedateday, 'duedatetime':self.duedatetime, 'duedateonoff':self.duedateonoff, 'amiaministep':self.amiaministep, 'whichminiami':self.whichminiami, 'importance':self.importance, 'notes':self.notes, 'schedule_date':self.schedule_date, 'schedule_start':self.schedule_start, 'schedule_duration':self.schedule_duration})
+        c.execute("INSERT INTO '{}' (task, checked, starred, difficulty, duedateday, duedatetime, duedateonoff, amiaministep, whichminiami, importance, notes, schedule_date, schedule_start, schedule_duration, block_color) VALUES (:words, :checked, :starred, :difficulty, :duedateday, :duedatetime, :duedateonoff, :amiaministep, :whichminiami, :importance, :notes, :schedule_date, :schedule_start, :schedule_duration, :block_color)".format(self.switchtolistcopy.get()), {'words':self.name, 'checked':self.status, 'starred':self.star, 'difficulty':self.difficulty, 'duedateday':self.duedateday, 'duedatetime':self.duedatetime, 'duedateonoff':self.duedateonoff, 'amiaministep':self.amiaministep, 'whichminiami':self.whichminiami, 'importance':self.importance, 'notes':self.notes, 'schedule_date':self.schedule_date, 'schedule_start':self.schedule_start, 'schedule_duration':self.schedule_duration, 'block_color':self.block_color})
 
         c.execute('''SELECT rowid FROM '{}' WHERE task='{}' AND checked='{}' AND difficulty='{}' AND notes='{}' '''.format(self.switchtolistcopy.get(), self.name, self.status, self.difficulty, self.notes))
         oidgrabber = c.fetchone()[0]
 
         for step in sql_process.get_ministeps(self.number, currentlistname):
-            c.execute("INSERT INTO '{}' (task, checked, starred, difficulty, duedateday, duedatetime, duedateonoff, amiaministep, whichminiami, importance, notes, schedule_date, schedule_start, schedule_duration) VALUES (:words, :checked, :starred, :difficulty, :duedateday, :duedatetime, :duedateonoff, :amiaministep, :whichminiami, :importance, :notes, :schedule_date, :schedule_start, :schedule_duration)".format(self.switchtolistcopy.get()), {'words':step[1], 'checked':step[2], 'starred':step[3], 'difficulty':step[4], 'duedateday':step[5], 'duedatetime':step[6], 'duedateonoff':step[7], 'amiaministep':step[8], 'whichminiami':oidgrabber, 'importance':step[10], 'notes':step[11], 'schedule_date':step[12] if len(step) > 12 else '', 'schedule_start':step[13] if len(step) > 13 else '', 'schedule_duration':step[14] if len(step) > 14 else ''})
+            c.execute("INSERT INTO '{}' (task, checked, starred, difficulty, duedateday, duedatetime, duedateonoff, amiaministep, whichminiami, importance, notes, schedule_date, schedule_start, schedule_duration, block_color) VALUES (:words, :checked, :starred, :difficulty, :duedateday, :duedatetime, :duedateonoff, :amiaministep, :whichminiami, :importance, :notes, :schedule_date, :schedule_start, :schedule_duration, :block_color)".format(self.switchtolistcopy.get()), {'words':step[1], 'checked':step[2], 'starred':step[3], 'difficulty':step[4], 'duedateday':step[5], 'duedatetime':step[6], 'duedateonoff':step[7], 'amiaministep':step[8], 'whichminiami':oidgrabber, 'importance':step[10], 'notes':step[11], 'schedule_date':step[12] if len(step) > 12 else '', 'schedule_start':step[13] if len(step) > 13 else '', 'schedule_duration':step[14] if len(step) > 14 else '', 'block_color':step[15] if len(step) > 15 else ''})
 
 
         conn.commit()
@@ -1991,33 +1994,27 @@ class display_task:
         allfnctns_schedule_headerL = Label(allfnctnsF_status, text='Schedule', font=('Calibri', 13), bootstyle='primary', wraplength=160)
         allfnctns_schedule_headerL.grid(row=10, column=0, columnspan=2, pady=(10, 0))
 
-        allfnctns_schedule_de = DateEntry(allfnctnsF_status, bootstyle='secondary', firstweekday=6, width=9)
-        allfnctns_schedule_de.grid(row=11, column=0, pady=5, padx=5, columnspan=2)
-        allfnctns_schedule_de.entry.delete(0, 'end')
-        allfnctns_schedule_de.entry.insert(0, self.schedule_date)
+        if self.schedule_start and self.schedule_duration:
+            allfnctns_schedule_statustext = myday_time_wheel.format_time_range(self.schedule_start, self.schedule_duration)
+            if self.schedule_date:
+                allfnctns_schedule_statustext = f'{self.schedule_date}, {allfnctns_schedule_statustext}'
+        elif self.schedule_date:
+            allfnctns_schedule_statustext = f'{self.schedule_date} (all day)'
+        else:
+            allfnctns_schedule_statustext = 'Not scheduled'
 
-        # Packed side-by-side inside their own sub-frame (rather than
-        # placed directly into columns 0/1) so their width doesn't widen
-        # this panel's narrow icon-button column -- TDB_F is a fixed
-        # ~200px ScrolledFrame with no horizontal scroll, so any single
-        # cell wider than its column's usual content pushes later rows
-        # off the clickable area.
-        allfnctns_schedule_timeF = Frame(allfnctnsF_status)
-        allfnctns_schedule_timeF.grid(row=12, column=0, columnspan=2, pady=5, padx=5)
+        allfnctns_schedule_statusL = Label(allfnctnsF_status, text=allfnctns_schedule_statustext,
+                                            font=('Calibri', 11), wraplength=160)
+        allfnctns_schedule_statusL.grid(row=11, column=0, columnspan=2, pady=(2, 5))
 
-        allfnctns_schedule_startE = Entry(allfnctns_schedule_timeF, font=('Calibri', 12), width=5, justify='center')
-        allfnctns_schedule_startE.pack(side='left', padx=2)
-        allfnctns_schedule_startE.insert(0, self.schedule_start if self.schedule_start else 'HHMM')
-
-        allfnctns_schedule_durationE = Entry(allfnctns_schedule_timeF, font=('Calibri', 12), width=5, justify='center')
-        allfnctns_schedule_durationE.pack(side='left', padx=2)
-        allfnctns_schedule_durationE.insert(0, self.schedule_duration if self.schedule_duration else 'mins')
-
-        allfnctns_schedule_savebutton = Button(allfnctnsF_status, text='Save', command=lambda: (self.set_schedule(allfnctns_schedule_de.entry.get(), allfnctns_schedule_startE.get(), allfnctns_schedule_durationE.get())), bootstyle='secondary outline')
-        allfnctns_schedule_savebutton.grid(row=13, column=0, columnspan=2, pady=5, padx=5)
+        allfnctns_schedule_setbutton = Button(allfnctnsF_status, text='Set schedule...', bootstyle='secondary outline',
+                                               command=lambda: myday_time_wheel.open_schedule_popup(
+                                                   TDB_F, self.schedule_date, self.schedule_start, self.schedule_duration,
+                                                   on_save=lambda d, s, dur: self.set_schedule(d, s, dur)))
+        allfnctns_schedule_setbutton.grid(row=12, column=0, columnspan=2, pady=5, padx=5)
 
         allfnctns_schedule_clearbutton = Button(allfnctnsF_status, text='Unschedule', command=lambda: (self.clear_schedule()), bootstyle='danger outline')
-        allfnctns_schedule_clearbutton.grid(row=14, column=0, columnspan=2, pady=5, padx=5)
+        allfnctns_schedule_clearbutton.grid(row=13, column=0, columnspan=2, pady=5, padx=5)
 
         Separator(allfnctnsF_status).grid(row=15, column=0, columnspan=2, sticky='nsew')
 

@@ -42,6 +42,8 @@ from datetime import date, timedelta
 from ttkbootstrap import Frame, Label, Button, ScrolledFrame, Separator, Scrollbar
 from ttkbootstrap.style import Style as BSStyle
 from ttkbootstrap.internal import wheel
+from ttkbootstrap.dialogs import Querybox
+from myday_time_wheel import open_schedule_popup
 
 DAY_STRIP_SPAN = 3  # days shown on either side of the selected date (3 -> 7-day strip)
 CELL_HEIGHT_PX = 50
@@ -54,6 +56,41 @@ DRAG_SNAP_MIN = 15
 AUTOSCROLL_MARGIN_PX = 30  # how close to the canvas top/bottom edge triggers auto-scroll
 AUTOSCROLL_STEP_UNITS = 12  # px per auto-scroll tick (yscrollincrement=1, so this is pixels)
 AUTOSCROLL_INTERVAL_MS = 30
+
+# Fixed positions in a `SELECT rowid, *` row tuple for the columns added by
+# migrations after the original 11-column task schema. Deliberately
+# absolute (not row[-N]) so adding another trailing column later (as
+# block_color itself just was, after schedule_duration) can never silently
+# shift these -- row[-1] meant schedule_duration before block_color
+# existed and would silently mean something else after, without every
+# read site erroring, just quietly reading the wrong field.
+IDX_SCHEDULE_DATE = 12
+IDX_SCHEDULE_START = 13
+IDX_SCHEDULE_DURATION = 14
+IDX_BLOCK_COLOR = 15
+
+PRESET_BLOCK_COLORS = [
+    '#e74c3c', '#e67e22', '#f1c40f', '#2ecc71', '#1abc9c',
+    '#3498db', '#9b59b6', '#e84393', '#7f8c8d', '#34495e',
+]
+
+
+def _row_get(row, index, default=''):
+    return row[index] if len(row) > index else default
+
+
+def _readable_text_color(hex_color):
+    """Picks black or white text for legibility against an arbitrary
+    custom block_color -- unlike the theme's finite color tokens (already
+    paired with colors.selectfg by the theme itself), a user-chosen hex
+    color could be anywhere on the brightness spectrum."""
+    try:
+        h = hex_color.lstrip('#')
+        r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    except (ValueError, IndexError, AttributeError):
+        return '#ffffff'
+    luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+    return '#000000' if luminance > 0.6 else '#ffffff'
 
 
 def _iter_task_tables(cursor):
@@ -88,13 +125,13 @@ def _query_scheduled_tasks_for_date(selected_date):
         except sqlite3.OperationalError:
             continue
         for row in c.fetchall():
-            sched_start, sched_duration = row[-2], row[-1]
+            sched_start, sched_duration = _row_get(row, IDX_SCHEDULE_START), _row_get(row, IDX_SCHEDULE_DURATION)
             if sched_start and sched_duration:
                 timed.append((row, table_name))
             else:
                 allday.append((row, table_name))
     conn.close()
-    timed.sort(key=lambda pair: pair[0][-2])  # zero-padded 'HHMM' sorts correctly as text
+    timed.sort(key=lambda pair: _row_get(pair[0], IDX_SCHEDULE_START))  # zero-padded 'HHMM' sorts correctly as text
     return timed, allday
 
 
@@ -318,23 +355,31 @@ class WeekView(Frame):
         colors = BSStyle().colors
         for row, list_name in allday_results:
             rowid, task, checked, starred = row[0], row[1], row[2], row[3]
-            bg = colors.success if checked == 'checked' else (colors.info if starred == 'y' else colors.secondary)
+            block_color = _row_get(row, IDX_BLOCK_COLOR)
+            if block_color:
+                bg, fg = block_color, _readable_text_color(block_color)
+            else:
+                bg = colors.success if checked == 'checked' else (colors.info if starred == 'y' else colors.secondary)
+                fg = colors.selectfg
             chipF = tk.Frame(self.allday_F, bg=bg, highlightthickness=0)
             chipF.pack(side='left', padx=4, pady=4)
 
             check_glyph = '✓' if checked == 'checked' else '○'
-            checkL = tk.Label(chipF, text=check_glyph, bg=bg, fg=colors.selectfg, font=('Calibri', 9),
+            checkL = tk.Label(chipF, text=check_glyph, bg=bg, fg=fg, font=('Calibri', 9),
                                padx=4, pady=2, cursor='hand2')
             checkL.pack(side='left')
             checkL.bind('<Button-1>', lambda e, rid=rowid, ln=list_name, cur=checked: self._toggle(rid, ln, cur))
+            checkL.bind('<Button-3>', lambda e, rid=rowid, ln=list_name, r=row: self._open_block_menu(e, rid, ln, r))
 
             text = task + ('  ★' if starred == 'y' else '')
             font = ('Calibri', 12, 'overstrike') if checked == 'checked' else ('Calibri', 12)
-            chipL = tk.Label(chipF, text=text, bg=bg, fg=colors.selectfg, font=font, padx=4, pady=4, cursor='fleur')
+            chipL = tk.Label(chipF, text=text, bg=bg, fg=fg, font=font, padx=4, pady=4, cursor='fleur')
             chipL.pack(side='left')
-            chipLN = tk.Label(chipF, text=self.get_list_display(list_name), bg=bg, fg=colors.selectfg,
+            chipLN = tk.Label(chipF, text=self.get_list_display(list_name), bg=bg, fg=fg,
                                font=('Calibri', 9), padx=4, cursor='fleur')
             chipLN.pack(side='left')
+            for w in (chipL, chipLN):
+                w.bind('<Button-3>', lambda e, rid=rowid, ln=list_name, r=row: self._open_block_menu(e, rid, ln, r))
 
             # Dragging the chip's text (not the checkmark, same reasoning
             # as the timeline blocks) down onto the timeline converts this
@@ -366,7 +411,7 @@ class WeekView(Frame):
         [(row, list_name, start_min, duration_min, x_offset, width), ...]."""
         parsed = []
         for row, list_name in timed_results:
-            sched_start, sched_duration = row[-2], row[-1]
+            sched_start, sched_duration = _row_get(row, IDX_SCHEDULE_START), _row_get(row, IDX_SCHEDULE_DURATION)
             try:
                 hour = int(sched_start[:2])
                 minute = int(sched_start[2:])
@@ -418,11 +463,16 @@ class WeekView(Frame):
             y = start_min
             height = max(duration_minutes, 18)
 
-            bg = colors.success if checked == 'checked' else (colors.info if starred == 'y' else colors.primary)
+            block_color = _row_get(row, IDX_BLOCK_COLOR)
+            if block_color:
+                bg, fg = block_color, _readable_text_color(block_color)
+            else:
+                bg = colors.success if checked == 'checked' else (colors.info if starred == 'y' else colors.primary)
+                fg = colors.selectfg
             blockF = tk.Frame(self.timeline_canvas, bg=bg, highlightthickness=1, highlightbackground=colors.bg)
 
             check_glyph = '✓' if checked == 'checked' else '○'
-            checkL = tk.Label(blockF, text=check_glyph, bg=bg, fg=colors.selectfg, font=('Calibri', 11, 'bold'),
+            checkL = tk.Label(blockF, text=check_glyph, bg=bg, fg=fg, font=('Calibri', 11, 'bold'),
                                cursor='hand2')
             checkL.pack(side='left', padx=(4, 2), pady=2)
             checkL.bind('<Button-1>', lambda e, rid=rowid, ln=list_name, cur=checked: self._toggle(rid, ln, cur))
@@ -432,10 +482,10 @@ class WeekView(Frame):
             textF.pack(side='left', fill='both', expand=True)
             font = ('Calibri', 11, 'overstrike') if checked == 'checked' else ('Calibri', 11, 'bold')
             text = task + ('  ★' if starred == 'y' else '')
-            textL1 = tk.Label(textF, text=text, bg=bg, fg=colors.selectfg, font=font,
+            textL1 = tk.Label(textF, text=text, bg=bg, fg=fg, font=font,
                                anchor='w', justify='left', cursor='fleur')
             textL1.pack(fill='x', padx=2, pady=(2, 0))
-            textL2 = tk.Label(textF, text=self.get_list_display(list_name), bg=bg, fg=colors.selectfg,
+            textL2 = tk.Label(textF, text=self.get_list_display(list_name), bg=bg, fg=fg,
                                font=('Calibri', 9), anchor='w', cursor='fleur')
             textL2.pack(fill='x', padx=2)
 
@@ -669,6 +719,7 @@ class WeekView(Frame):
         make_btn('✔ Check / Uncheck', lambda: self._toggle(rowid, list_name, checked))
         make_btn('⭐ Star / Unstar', lambda: self._toggle_star(rowid, list_name, starred))
         make_btn('🕐 Change time...', lambda: self._open_change_time_popup(rowid, list_name, row))
+        make_btn('🎨 Change color...', lambda: self._open_color_popup(rowid, list_name, _row_get(row, IDX_BLOCK_COLOR)))
         make_btn('🗓 Remove from My Day', lambda: self._schedule_task(rowid, list_name, '', '', ''))
         make_btn('🖊 Rename task', lambda: self._open_rename_popup(rowid, list_name, row[1]))
         make_btn('🗑 Delete task', lambda: self._delete_task(rowid, list_name))
@@ -686,6 +737,58 @@ class WeekView(Frame):
         self._render_schedule()
         if self.on_task_toggle:
             self.on_task_toggle()
+
+    def _set_block_color(self, rowid, list_name, hex_color):
+        conn = sqlite3.connect('info.db')
+        c = conn.cursor()
+        c.execute("UPDATE '{}' SET block_color=? WHERE rowid=?".format(list_name), (hex_color, rowid))
+        conn.commit()
+        conn.close()
+        self._render_schedule()
+        if self.on_task_toggle:
+            self.on_task_toggle()
+
+    def _open_color_popup(self, rowid, list_name, current_color):
+        colors = BSStyle().colors
+        popup = tk.Toplevel(self)
+        popup.title('Change color')
+        popup.configure(bg=colors.bg)
+
+        contentF = Frame(popup, bootstyle='dark')
+        contentF.pack(fill='both', expand=True)
+
+        Label(contentF, text='Choose a color', bootstyle='dark inverse',
+              font=('Calibri', 12, 'bold')).pack(pady=(14, 8), padx=16)
+
+        def apply_and_close(hex_value):
+            self._set_block_color(rowid, list_name, hex_value)
+            popup.destroy()
+
+        swatchF = tk.Frame(contentF, bg=colors.bg)
+        swatchF.pack(padx=16, pady=(0, 10))
+        swatch_size, cols = 32, 5
+        for i, hexcol in enumerate(PRESET_BLOCK_COLORS):
+            row_i, col_i = divmod(i, cols)
+            border = colors.selectfg if hexcol == current_color else colors.bg
+            sw = tk.Frame(swatchF, width=swatch_size, height=swatch_size, bg=hexcol,
+                          highlightthickness=2, highlightbackground=border, cursor='hand2')
+            sw.grid(row=row_i, column=col_i, padx=4, pady=4)
+            sw.grid_propagate(False)
+            sw.bind('<Button-1>', lambda e, h=hexcol: apply_and_close(h))
+
+        Separator(contentF, bootstyle='secondary').pack(fill='x', padx=16, pady=(4, 10))
+
+        def open_colorwheel():
+            result = Querybox.get_color(popup, title='Custom color', initialcolor=current_color or None)
+            if result is not None:
+                apply_and_close(result.hex)
+
+        Button(contentF, text='Custom color...', bootstyle='secondary outline',
+               command=open_colorwheel).pack(pady=(0, 8), padx=16, fill='x')
+        Button(contentF, text='Reset to default', bootstyle='secondary outline',
+               command=lambda: apply_and_close('')).pack(pady=(0, 8), padx=16, fill='x')
+        Button(contentF, text='Cancel', bootstyle='secondary',
+               command=popup.destroy).pack(pady=(0, 14), padx=16, fill='x')
 
     def _delete_task(self, rowid, list_name):
         conn = sqlite3.connect('info.db')
@@ -724,28 +827,14 @@ class WeekView(Frame):
         tk.Button(popup, text='Save', command=save).pack(pady=12)
 
     def _open_change_time_popup(self, rowid, list_name, row):
-        sched_date, sched_start, sched_duration = row[-3], row[-2], row[-1]
-        popup = tk.Toplevel(self)
-        popup.title('Change time')
-        popup.geometry('280x260')
-        tk.Label(popup, text='Date (MM/DD/YY):').pack(pady=(12, 2))
-        dateE = tk.Entry(popup)
-        dateE.insert(0, sched_date or self.selected_date.strftime('%x'))
-        dateE.pack()
-        tk.Label(popup, text='Start (HHMM, optional):').pack(pady=(12, 2))
-        startE = tk.Entry(popup)
-        startE.insert(0, sched_start or '')
-        startE.pack()
-        tk.Label(popup, text='Duration (mins, optional):').pack(pady=(12, 2))
-        durE = tk.Entry(popup)
-        durE.insert(0, sched_duration or '')
-        durE.pack()
-
-        def save():
-            self._schedule_task(rowid, list_name, dateE.get().strip(), startE.get().strip(), durE.get().strip())
-            popup.destroy()
-
-        tk.Button(popup, text='Save', command=save).pack(pady=14)
+        sched_date = _row_get(row, IDX_SCHEDULE_DATE)
+        sched_start = _row_get(row, IDX_SCHEDULE_START)
+        sched_duration = _row_get(row, IDX_SCHEDULE_DURATION)
+        open_schedule_popup(
+            self, sched_date or self.selected_date.strftime('%x'), sched_start, sched_duration,
+            on_save=lambda d, s, dur: self._schedule_task(rowid, list_name, d, s, dur),
+            title='Change time',
+        )
 
     def _open_full_task_view(self, rowid, list_name):
         if self.open_task_detail:
