@@ -36,14 +36,15 @@ Design notes:
   schedule_date is set, it's "all-day".
 """
 
+import math
 import sqlite3
 import tkinter as tk
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from ttkbootstrap import Frame, Label, Button, ScrolledFrame, Separator, Scrollbar
 from ttkbootstrap.style import Style as BSStyle
 from ttkbootstrap.internal import wheel
-from ttkbootstrap.dialogs import Querybox
 from myday_time_wheel import open_schedule_popup
+from color_picker import open_color_picker_popup
 
 DAY_STRIP_SPAN = 3  # days shown on either side of the selected date (3 -> 7-day strip)
 CELL_HEIGHT_PX = 50
@@ -56,6 +57,10 @@ DRAG_SNAP_MIN = 15
 AUTOSCROLL_MARGIN_PX = 30  # how close to the canvas top/bottom edge triggers auto-scroll
 AUTOSCROLL_STEP_UNITS = 12  # px per auto-scroll tick (yscrollincrement=1, so this is pixels)
 AUTOSCROLL_INTERVAL_MS = 30
+TIMELINE_BLOCK_CORNER_RADIUS = 30
+CHECK_ZONE_WIDTH = 22  # left strip of a timed block reserved for the checkmark hit target
+NOW_LINE_INTERVAL_MS = 30000  # how often the current-time line/dimming redraws while on today
+NOW_LINE_DIM_FACTOR = 0.85  # RGB multiplier for the past-hour dimming rectangle
 
 # Fixed positions in a `SELECT rowid, *` row tuple for the columns added by
 # migrations after the original 11-column task schema. Deliberately
@@ -68,11 +73,6 @@ IDX_SCHEDULE_DATE = 12
 IDX_SCHEDULE_START = 13
 IDX_SCHEDULE_DURATION = 14
 IDX_BLOCK_COLOR = 15
-
-PRESET_BLOCK_COLORS = [
-    '#e74c3c', '#e67e22', '#f1c40f', '#2ecc71', '#1abc9c',
-    '#3498db', '#9b59b6', '#e84393', '#7f8c8d', '#34495e',
-]
 
 
 def _row_get(row, index, default=''):
@@ -91,6 +91,51 @@ def _readable_text_color(hex_color):
         return '#ffffff'
     luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
     return '#000000' if luminance > 0.6 else '#ffffff'
+
+
+def _blend_darker(hex_color, factor=NOW_LINE_DIM_FACTOR):
+    """Multiplies each RGB channel by `factor` and clamps to [0,255] --
+    ttkbootstrap's Colors object has no pre-shaded variant of colors.bg
+    to reuse for the past-hour dimming rectangle."""
+    try:
+        h = hex_color.lstrip('#')
+        r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    except (ValueError, IndexError, AttributeError):
+        return hex_color
+    r, g, b = (max(0, min(255, int(c * factor))) for c in (r, g, b))
+    return '#{:02x}{:02x}{:02x}'.format(r, g, b)
+
+
+_ARC_STEPS = 10  # points per quarter-circle corner -- high enough that the
+# polygon's straight-line segments alone read as a smooth curve with no
+# need for canvas smooth=True, whose quadratic spline treats vertices as
+# control points (not on-curve points), which is what made the old
+# 3-point-per-corner recipe look inconsistent/choppy across differently-
+# proportioned blocks.
+
+
+def _rounded_rect_points(x0, y0, x1, y1, r):
+    """Point list for a true circular-arc rounded rectangle: each corner
+    is sampled directly off its quarter-circle, so all four corners are
+    geometrically identical regardless of the block's aspect ratio."""
+    r = max(0, min(r, (x1 - x0) / 2, (y1 - y0) / 2))
+    if r == 0:
+        return [x0, y0, x1, y0, x1, y1, x0, y1]
+
+    def arc(cx, cy, start_angle, end_angle):
+        pts = []
+        for i in range(_ARC_STEPS + 1):
+            theta = start_angle + (end_angle - start_angle) * i / _ARC_STEPS
+            pts.append(cx + r * math.cos(theta))
+            pts.append(cy + r * math.sin(theta))
+        return pts
+
+    points = []
+    points += arc(x0 + r, y0 + r, math.pi, 1.5 * math.pi)        # top-left
+    points += arc(x1 - r, y0 + r, 1.5 * math.pi, 2 * math.pi)    # top-right
+    points += arc(x1 - r, y1 - r, 0, 0.5 * math.pi)              # bottom-right
+    points += arc(x0 + r, y1 - r, 0.5 * math.pi, math.pi)        # bottom-left
+    return points
 
 
 def _iter_task_tables(cursor):
@@ -164,6 +209,9 @@ class WeekView(Frame):
 
     get_list_display(hidden_name) -> display name string, so this widget
     doesn't need to import td4_sqlite_processes directly.
+    get_list_color(hidden_name) -> hex color string ('' if the list has
+    no custom color set) -- the fallback layer between a task's own
+    block_color and the checked/starred-derived default.
     on_task_toggle() is an optional callback fired after a task is
     checked/unchecked or scheduled, so the host app can refresh sidebar
     counters etc.
@@ -173,10 +221,11 @@ class WeekView(Frame):
     rather than being duplicated in this module.
     """
 
-    def __init__(self, parent, get_list_display, on_task_toggle=None, open_task_detail=None, **kwargs):
+    def __init__(self, parent, get_list_display, get_list_color, on_task_toggle=None, open_task_detail=None, **kwargs):
         kwargs.setdefault('bootstyle', 'default')
         super().__init__(parent, **kwargs)
         self.get_list_display = get_list_display
+        self.get_list_color = get_list_color
         self.on_task_toggle = on_task_toggle
         self.open_task_detail = open_task_detail
         self.selected_date = date.today()
@@ -186,7 +235,7 @@ class WeekView(Frame):
         self.strip_start_date = date.today() - timedelta(days=DAY_STRIP_SPAN)
         self.suggestions_visible = False
         self._allday_widgets = []
-        self._timeline_blocks = []
+        self._now_line_job = None
 
         # ---- Header: big date + weekday + suggestions toggle ----
         self.header_F = Frame(self, bootstyle='default')
@@ -230,15 +279,10 @@ class WeekView(Frame):
         self.timeline_canvas.config(yscrollcommand=self.timeline_vscroll.set,
                                      scrollregion=(0, 0, TIMELINE_WIDTH, 24 * HOUR_HEIGHT_PX),
                                      yscrollincrement=1)
-        # Bound directly on the canvas -- an Enter/Leave-based "only while
-        # hovering" toggle doesn't work here, because each block is a
-        # genuine embedded child *window* (create_window), not just drawn
-        # pixels: the moment the pointer crosses onto one, X11/Tk deliver
-        # <Leave> to the canvas and <Enter> to the block instead, so a
-        # canvas-only Enter/Leave toggle disables scrolling the instant
-        # the cursor is over any block -- exactly where it usually is.
-        # Every block's widgets get this same binding individually at
-        # creation time in _render_timeline/_render_allday_banners.
+        # Blocks are pure canvas-drawn primitives now (no embedded
+        # tk.Frame/create_window) specifically so there's no child window
+        # left to steal pointer events -- a single canvas-level bind
+        # covers every pixel of every block automatically.
         #
         # Both <MouseWheel> AND <TouchpadScroll> are bound: on Tk 9 (this
         # app's Tk), every Apple trackpad/Magic Mouse/Magic Trackpad fires
@@ -259,6 +303,14 @@ class WeekView(Frame):
         self._render_strip()
         self._render_header()
         self._render_schedule()
+
+        # Current-time line: runs for the widget's whole life (not tied
+        # to whatever date happens to be selected right now -- it self-
+        # guards in _render_now_line and just draws nothing on other
+        # days), cancelled on <Destroy> since clear_board() destroying
+        # backFrame is what tears this widget down on every screen switch.
+        self.bind('<Destroy>', self._on_destroy)
+        self._schedule_now_line_tick()
 
     # ------------------------------------------------------------------
     def _render_header(self):
@@ -339,6 +391,23 @@ class WeekView(Frame):
         self._render_allday_banners(allday)
         self._render_timeline(timed)
 
+    def _resolve_block_colors(self, row, checked, starred, list_name, default_neither):
+        """block_color (explicit per-task override) > the task's list's
+        color (new fallback layer) > the caller-supplied checked/starred-
+        derived default -- shared by both banners and blocks so the
+        priority logic lives in exactly one place. `default_neither` lets
+        each caller keep its own (deliberately different) "neither
+        checked nor starred" fallback color."""
+        colors = BSStyle().colors
+        block_color = _row_get(row, IDX_BLOCK_COLOR)
+        if block_color:
+            return block_color, _readable_text_color(block_color)
+        list_color = self.get_list_color(list_name) if self.get_list_color else ''
+        if list_color:
+            return list_color, _readable_text_color(list_color)
+        bg = colors.success if checked == 'checked' else (colors.info if starred == 'y' else default_neither)
+        return bg, colors.selectfg
+
     def _render_allday_banners(self, allday_results):
         for w in self._allday_widgets:
             w.destroy()
@@ -355,12 +424,7 @@ class WeekView(Frame):
         colors = BSStyle().colors
         for row, list_name in allday_results:
             rowid, task, checked, starred = row[0], row[1], row[2], row[3]
-            block_color = _row_get(row, IDX_BLOCK_COLOR)
-            if block_color:
-                bg, fg = block_color, _readable_text_color(block_color)
-            else:
-                bg = colors.success if checked == 'checked' else (colors.info if starred == 'y' else colors.secondary)
-                fg = colors.selectfg
+            bg, fg = self._resolve_block_colors(row, checked, starred, list_name, colors.secondary)
             chipF = tk.Frame(self.allday_F, bg=bg, highlightthickness=0)
             chipF.pack(side='left', padx=4, pady=4)
 
@@ -401,6 +465,41 @@ class WeekView(Frame):
             if hour < 24:
                 self.timeline_canvas.create_text(TIMELINE_LABEL_WIDTH - 6, y + 2, text=_format_hour_label(hour),
                                                   anchor='ne', fill=colors.fg, font=('Calibri', 9), tags='gridline')
+
+    # ------------------------------------------------------------------
+    # Current-time line + past-hour dimming -- only drawn when browsing
+    # today; runs on its own recurring timer independent of navigation
+    # (see _schedule_now_line_tick), not tied to a full _render_schedule.
+    def _render_now_line(self):
+        self.timeline_canvas.delete('nowline')
+        if self.selected_date != date.today():
+            return
+        now = datetime.now()
+        y = now.hour * HOUR_HEIGHT_PX + now.minute
+        colors = BSStyle().colors
+        self.timeline_canvas.create_rectangle(
+            TIMELINE_LABEL_WIDTH, 0, TIMELINE_WIDTH, y,
+            fill=_blend_darker(colors.bg), outline='', tags='nowline')
+        self.timeline_canvas.create_line(
+            TIMELINE_LABEL_WIDTH, y, TIMELINE_WIDTH, y,
+            fill=colors.danger, width=2, tags='nowline')
+        # Raised relative to 'gridline' specifically (not "top of
+        # everything"), so it always sits above the hour grid but below
+        # blocks regardless of whether a block redraw or this timer's own
+        # tick happened most recently -- blocks are always (re)created
+        # after grid lines each render, so this ordering holds either way.
+        self.timeline_canvas.tag_raise('nowline', 'gridline')
+
+    def _schedule_now_line_tick(self):
+        self._render_now_line()
+        self._now_line_job = self.after(NOW_LINE_INTERVAL_MS, self._schedule_now_line_tick)
+
+    def _on_destroy(self, event):
+        if event.widget is not self:
+            return
+        if self._now_line_job is not None:
+            self.after_cancel(self._now_line_job)
+            self._now_line_job = None
 
     @staticmethod
     def _layout_timed_blocks(timed_results):
@@ -452,67 +551,105 @@ class WeekView(Frame):
         return results
 
     def _render_timeline(self, timed_results):
-        for w in self._timeline_blocks:
-            w.destroy()
-        self._timeline_blocks = []
+        # 'block' is the bulk-clear tag every piece of every block carries
+        # -- a single delete() removes the whole previous render. Per-
+        # block tags below are index-based (not rowid-based) specifically
+        # so tag_bind's "replace, don't stack" behavior for a given
+        # tag+sequence keeps the canvas's binding table bounded across a
+        # long session, rather than accumulating one stale entry per
+        # distinct rowid ever shown.
         self.timeline_canvas.delete('block')
 
         colors = BSStyle().colors
-        for row, list_name, start_min, duration_minutes, x_offset, width in self._layout_timed_blocks(timed_results):
+        for i, (row, list_name, start_min, duration_minutes, x_offset, width) in enumerate(self._layout_timed_blocks(timed_results)):
             rowid, task, checked, starred = row[0], row[1], row[2], row[3]
-            y = start_min
+            y0 = start_min
             height = max(duration_minutes, 18)
+            x0 = TIMELINE_LABEL_WIDTH + 4 + x_offset
+            x1 = x0 + max(width - 8, 20)
+            y1 = y0 + height
 
-            block_color = _row_get(row, IDX_BLOCK_COLOR)
-            if block_color:
-                bg, fg = block_color, _readable_text_color(block_color)
-            else:
-                bg = colors.success if checked == 'checked' else (colors.info if starred == 'y' else colors.primary)
-                fg = colors.selectfg
-            blockF = tk.Frame(self.timeline_canvas, bg=bg, highlightthickness=1, highlightbackground=colors.bg)
+            bg, fg = self._resolve_block_colors(row, checked, starred, list_name, colors.primary)
+            grp_tag = 'blkgrp{}'.format(i)
+            hit_tag = 'blkhit{}'.format(i)
+            check_tag = 'blkcheck{}'.format(i)
 
+            self.timeline_canvas.create_polygon(
+                _rounded_rect_points(x0, y0, x1, y1, TIMELINE_BLOCK_CORNER_RADIUS),
+                fill=bg, outline=colors.bg, width=1,
+                tags=('block', grp_tag, hit_tag))
+
+            # Checkmark: a filled hit-rect behind the glyph, since an
+            # unfilled canvas shape only hit-tests on its outline, not its
+            # interior -- the glyph's own thin text strokes alone would be
+            # a near-unclickable target. Inset top/bottom by the same
+            # corner radius as the polygon underneath it, or a sharp-
+            # cornered rect here would square off the polygon's rounded
+            # top-left/bottom-left corners with a solid same-color nub.
+            corner_r = max(0, min(TIMELINE_BLOCK_CORNER_RADIUS, (x1 - x0) / 2, height / 2))
+            self.timeline_canvas.create_rectangle(
+                x0, y0 + corner_r, x0 + CHECK_ZONE_WIDTH, y1 - corner_r, fill=bg, outline='',
+                tags=('block', grp_tag, check_tag))
+            y_mid = (y0 + y1) / 2
             check_glyph = '✓' if checked == 'checked' else '○'
-            checkL = tk.Label(blockF, text=check_glyph, bg=bg, fg=fg, font=('Calibri', 11, 'bold'),
-                               cursor='hand2')
-            checkL.pack(side='left', padx=(4, 2), pady=2)
-            checkL.bind('<Button-1>', lambda e, rid=rowid, ln=list_name, cur=checked: self._toggle(rid, ln, cur))
-            checkL.bind('<Button-3>', lambda e, rid=rowid, ln=list_name, r=row: self._open_block_menu(e, rid, ln, r))
+            self.timeline_canvas.create_text(
+                x0 + CHECK_ZONE_WIDTH / 2, y_mid, text=check_glyph,
+                font=('Calibri', 11, 'bold'), fill=fg, anchor='center',
+                tags=('block', grp_tag, check_tag))
 
-            textF = tk.Frame(blockF, bg=bg)
-            textF.pack(side='left', fill='both', expand=True)
-            font = ('Calibri', 11, 'overstrike') if checked == 'checked' else ('Calibri', 11, 'bold')
-            text = task + ('  ★' if starred == 'y' else '')
-            textL1 = tk.Label(textF, text=text, bg=bg, fg=fg, font=font,
-                               anchor='w', justify='left', cursor='fleur')
-            textL1.pack(fill='x', padx=2, pady=(2, 0))
-            textL2 = tk.Label(textF, text=self.get_list_display(list_name), bg=bg, fg=fg,
-                               font=('Calibri', 9), anchor='w', cursor='fleur')
-            textL2.pack(fill='x', padx=2)
+            # Task (+ list name, when there's room) is centered as a group
+            # within the block's full height -- built by placing both text
+            # items provisionally, measuring their actual rendered height
+            # via bbox() (accounts for wrapping), then repositioning around
+            # the block's vertical midpoint, rather than pinning to a fixed
+            # offset from the top.
+            text_x = x0 + CHECK_ZONE_WIDTH + 2
+            text_width = max(width - CHECK_ZONE_WIDTH - 6, 10)
+            task_font = ('Calibri', 11, 'bold', 'overstrike') if checked == 'checked' else ('Calibri', 11, 'bold')
+            task_text = task + ('  ★' if starred == 'y' else '')
+            task_item = self.timeline_canvas.create_text(
+                text_x, y0, text=task_text, font=task_font, fill=fg,
+                anchor='nw', justify='left', width=text_width,
+                tags=('block', grp_tag, hit_tag))
+            show_list_name = height >= 32
+            if show_list_name:
+                list_item = self.timeline_canvas.create_text(
+                    text_x, y0, text=self.get_list_display(list_name),
+                    font=('Calibri', 9), fill=fg, anchor='nw', width=text_width,
+                    tags=('block', grp_tag, hit_tag))
+                task_h = self.timeline_canvas.bbox(task_item)[3] - self.timeline_canvas.bbox(task_item)[1]
+                list_h = self.timeline_canvas.bbox(list_item)[3] - self.timeline_canvas.bbox(list_item)[1]
+                gap = 2
+                start_y = y0 + (height - (task_h + gap + list_h)) / 2
+                self.timeline_canvas.coords(task_item, text_x, start_y)
+                self.timeline_canvas.coords(list_item, text_x, start_y + task_h + gap)
+            else:
+                task_bbox = self.timeline_canvas.bbox(task_item)
+                task_h = task_bbox[3] - task_bbox[1]
+                self.timeline_canvas.coords(task_item, text_x, y0 + (height - task_h) / 2)
 
-            item_id = self.timeline_canvas.create_window(TIMELINE_LABEL_WIDTH + 4 + x_offset, y, window=blockF,
-                                                           width=max(width - 8, 20), height=height,
-                                                           anchor='nw', tags='block')
+            self.timeline_canvas.tag_bind(
+                check_tag, '<Button-1>',
+                lambda e, rid=rowid, ln=list_name, cur=checked: self._toggle(rid, ln, cur))
+            self.timeline_canvas.tag_bind(
+                check_tag, '<Button-3>',
+                lambda e, rid=rowid, ln=list_name, r=row: self._open_block_menu(e, rid, ln, r))
 
-            # Drag-to-reschedule and the right-click menu are bound on the
-            # text surface (frame + both labels) -- deliberately not on
-            # checkL, which already owns plain <Button-1> for toggling,
-            # so the two gestures can never fight over the same click.
-            for w in (textF, textL1, textL2):
-                w.bind('<ButtonPress-1>', lambda e, iid=item_id, rid=rowid, ln=list_name, dur=duration_minutes:
-                       self._drag_start_timeline(e, iid, rid, ln, dur))
-                w.bind('<B1-Motion>', self._drag_motion)
-                w.bind('<ButtonRelease-1>', self._drag_release)
-                w.bind('<Button-3>', lambda e, rid=rowid, ln=list_name, r=row: self._open_block_menu(e, rid, ln, r))
+            # Drag-to-reschedule and the right-click menu share the "hit"
+            # tag -- deliberately excluding the checkmark, which already
+            # owns <Button-1> for toggling, so the two gestures can never
+            # fight over the same click.
+            self.timeline_canvas.tag_bind(
+                hit_tag, '<ButtonPress-1>',
+                lambda e, tag=grp_tag, rid=rowid, ln=list_name, dur=duration_minutes, ox=x0, oy=y0:
+                    self._drag_start_timeline(e, tag, rid, ln, dur, ox, oy))
+            self.timeline_canvas.tag_bind(hit_tag, '<B1-Motion>', self._drag_motion)
+            self.timeline_canvas.tag_bind(hit_tag, '<ButtonRelease-1>', self._drag_release)
+            self.timeline_canvas.tag_bind(
+                hit_tag, '<Button-3>',
+                lambda e, rid=rowid, ln=list_name, r=row: self._open_block_menu(e, rid, ln, r))
 
-            # Every block widget also needs its own wheel/touchpad binding
-            # -- see the note by self.timeline_canvas's own binds in
-            # __init__ for why the canvas's binding alone isn't enough.
-            for w in (blockF, checkL, textF, textL1, textL2):
-                w.bind('<MouseWheel>', self._on_timeline_scroll)
-                if wheel.has_touchpad_scroll():
-                    w.bind(wheel.TOUCHPAD_SCROLL, self._on_timeline_touchpad_scroll)
-
-            self._timeline_blocks.append(blockF)
+        self._render_now_line()
 
     # ------------------------------------------------------------------
     # Timeline scrolling
@@ -541,14 +678,18 @@ class WeekView(Frame):
     # cursor stays there; reaching the very top of the day (nothing left
     # to scroll) is what lets the cursor "escape" upward into the all-day
     # row to drop there.
-    def _drag_start_timeline(self, event, item_id, rowid, list_name, duration_minutes):
-        orig_x, orig_y = self.timeline_canvas.coords(item_id)
+    def _drag_start_timeline(self, event, tag, rowid, list_name, duration_minutes, orig_x, orig_y):
+        # orig_x/orig_y are exactly the x0/start_min the block was just
+        # drawn with (passed straight through from the render loop) --
+        # canvas primitives have no single queryable "position" the way
+        # one create_window item's coords() could be read back, so the
+        # draw-time values are captured directly instead.
         canvas_top = self.timeline_canvas.winfo_rooty()
         mouse_y_in_canvas = self.timeline_canvas.canvasy(0) + (event.y_root - canvas_top)
         self._drag = {
-            'source': 'timeline', 'item_id': item_id, 'rowid': rowid, 'list_name': list_name,
+            'source': 'timeline', 'tag': tag, 'rowid': rowid, 'list_name': list_name,
             'duration': duration_minutes, 'orig_x': orig_x, 'grab_offset': mouse_y_in_canvas - orig_y,
-            'new_y': orig_y, 'moved': False, 'tooltip': None, 'ghost': None,
+            'cur_y': orig_y, 'new_y': orig_y, 'moved': False, 'tooltip': None, 'ghost': None,
             'start_y_root': event.y_root, 'autoscroll_dir': 0, 'autoscroll_job': None,
         }
 
@@ -561,9 +702,9 @@ class WeekView(Frame):
                  font=('Calibri', 10, 'bold'), padx=8, pady=4).pack()
         ghost.geometry('+{}+{}'.format(event.x_root + 12, event.y_root + 12))
         self._drag = {
-            'source': 'allday', 'item_id': None, 'rowid': rowid, 'list_name': list_name,
+            'source': 'allday', 'tag': None, 'rowid': rowid, 'list_name': list_name,
             'duration': DEFAULT_TIMED_DURATION_MIN, 'orig_x': None, 'grab_offset': DEFAULT_TIMED_DURATION_MIN / 2,
-            'new_y': None, 'moved': False, 'tooltip': None, 'ghost': ghost,
+            'cur_y': None, 'new_y': None, 'moved': False, 'tooltip': None, 'ghost': ghost,
             'start_y_root': event.y_root, 'autoscroll_dir': 0, 'autoscroll_job': None,
         }
 
@@ -600,9 +741,15 @@ class WeekView(Frame):
         raw_y = mouse_y_in_canvas - d['grab_offset']
         max_y = 24 * HOUR_HEIGHT_PX - d['duration']
         snapped_y = max(0, min(round(raw_y / DRAG_SNAP_MIN) * DRAG_SNAP_MIN, max_y))
+        if d['source'] == 'timeline' and snapped_y != d['cur_y']:
+            # canvas.move(tag, dx, dy) translates every item sharing that
+            # tag together -- a delta move, since a multi-primitive
+            # canvas block has no single absolute coords() to set the way
+            # one create_window item did. x never changes during a drag
+            # (always re-passed as orig_x unchanged), so only dy matters.
+            self.timeline_canvas.move(d['tag'], 0, snapped_y - d['cur_y'])
+            d['cur_y'] = snapped_y
         d['new_y'] = snapped_y
-        if d['source'] == 'timeline':
-            self.timeline_canvas.coords(d['item_id'], d['orig_x'], snapped_y)
         self._update_drag_tooltip(event, snapped_y, d['duration'])
 
     def _update_edge_autoscroll(self, event):
@@ -749,46 +896,11 @@ class WeekView(Frame):
             self.on_task_toggle()
 
     def _open_color_popup(self, rowid, list_name, current_color):
-        colors = BSStyle().colors
-        popup = tk.Toplevel(self)
-        popup.title('Change color')
-        popup.configure(bg=colors.bg)
-
-        contentF = Frame(popup, bootstyle='dark')
-        contentF.pack(fill='both', expand=True)
-
-        Label(contentF, text='Choose a color', bootstyle='dark inverse',
-              font=('Calibri', 12, 'bold')).pack(pady=(14, 8), padx=16)
-
-        def apply_and_close(hex_value):
-            self._set_block_color(rowid, list_name, hex_value)
-            popup.destroy()
-
-        swatchF = tk.Frame(contentF, bg=colors.bg)
-        swatchF.pack(padx=16, pady=(0, 10))
-        swatch_size, cols = 32, 5
-        for i, hexcol in enumerate(PRESET_BLOCK_COLORS):
-            row_i, col_i = divmod(i, cols)
-            border = colors.selectfg if hexcol == current_color else colors.bg
-            sw = tk.Frame(swatchF, width=swatch_size, height=swatch_size, bg=hexcol,
-                          highlightthickness=2, highlightbackground=border, cursor='hand2')
-            sw.grid(row=row_i, column=col_i, padx=4, pady=4)
-            sw.grid_propagate(False)
-            sw.bind('<Button-1>', lambda e, h=hexcol: apply_and_close(h))
-
-        Separator(contentF, bootstyle='secondary').pack(fill='x', padx=16, pady=(4, 10))
-
-        def open_colorwheel():
-            result = Querybox.get_color(popup, title='Custom color', initialcolor=current_color or None)
-            if result is not None:
-                apply_and_close(result.hex)
-
-        Button(contentF, text='Custom color...', bootstyle='secondary outline',
-               command=open_colorwheel).pack(pady=(0, 8), padx=16, fill='x')
-        Button(contentF, text='Reset to default', bootstyle='secondary outline',
-               command=lambda: apply_and_close('')).pack(pady=(0, 8), padx=16, fill='x')
-        Button(contentF, text='Cancel', bootstyle='secondary',
-               command=popup.destroy).pack(pady=(0, 14), padx=16, fill='x')
+        open_color_picker_popup(
+            self, current_color,
+            on_save=lambda hex_value: self._set_block_color(rowid, list_name, hex_value),
+            title='Task color',
+        )
 
     def _delete_task(self, rowid, list_name):
         conn = sqlite3.connect('info.db')

@@ -19,6 +19,7 @@ import json
 from corkboard_rich_text import build_pin_preview, open_pin_view, open_pin_editor, delete_image_file
 from myday_weekview import WeekView
 import myday_time_wheel
+from color_picker import open_color_picker_popup
 sql_process.migrate_corkboard_content()
 sql_process.migrate_task_schedule_columns()
 sql_process.migrate_task_block_color_column()
@@ -1399,6 +1400,13 @@ def open_more_tasksmenu():
     shcomptasksB.pack(fill='x', pady=4, padx=6)
     searchlistB = Button(listmenuF, text='🔎 Search                             ', command=lambda: searchthroughlistopen(), bootstyle='info outline')
     searchlistB.pack(fill='x', pady=4, padx=6)
+    setcolorB = Button(listmenuF, text='🎨 Set color...                     ', bootstyle='info outline',
+                        command=lambda: open_color_picker_popup(
+                            listmenuF, sql_process.get_list_color(currentlistname)[0],
+                            on_save=lambda hex_value: (sql_process.set_list_color(currentlistname, hex_value),
+                                                        refresh(return_='False')),
+                            title='List color'))
+    setcolorB.pack(fill='x', pady=4, padx=6)
 
     if currentlistname == 'customers':
         deletelistB.config(state='disabled')
@@ -2871,6 +2879,7 @@ def my_day_launch():
     myday_weekviewW = WeekView(
         backFrame,
         get_list_display=lambda ln: sql_process.get_current_list_display(ln)[0],
+        get_list_color=lambda ln: sql_process.get_list_color(ln)[0],
         on_task_toggle=None,
         open_task_detail=lambda rid, ln: open_task_detail_from_myday(rid, ln)
     )

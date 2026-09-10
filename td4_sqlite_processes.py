@@ -209,6 +209,22 @@ def get_current_list_display(current):
     else:
         return 'Unrecognized'
 
+def get_list_color(hidden_name):
+    """Returns (hex_color,) -- '' (not the dead 'Standard' sentinel every
+    list is created with) when no real color has been set, so callers
+    never need to special-case that string themselves."""
+    c_user000.execute("SELECT color FROM list_names WHERE hidden_name=?", (hidden_name,))
+    row = c_user000.fetchone()
+    if row is None or row[0] in (None, 'Standard'):
+        return ('',)
+    return row
+
+def set_list_color(hidden_name, hex_color):
+    """hex_color='' resets to the same 'Standard' sentinel fresh lists
+    already have, rather than introducing a second "unset" convention."""
+    c_user000.execute("UPDATE list_names SET color=? WHERE hidden_name=?", (hex_color or 'Standard', hidden_name))
+    conn_user000.commit()
+
 def get_columns(table_name):
     c.execute("""PRAGMA table_info('{}')""".format(table_name))
     column_names = c.fetchall()
